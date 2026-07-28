@@ -31,6 +31,7 @@ def check_structure(before, after):
     """Raise if any record lost its id, gained/lost a key, or changed a non-text value."""
     assert len(before) == len(after), "record count changed"
     for old, new in zip(before, after):
+        assert "id" in old, f"record has no id: {old}"
         assert old["id"] == new["id"], f"id changed: {old['id']} -> {new['id']}"
         assert old.keys() == new.keys(), f"keys changed on id={old['id']}"
         for key in old:
@@ -56,7 +57,17 @@ def main():
     boilerplate = collect_boilerplate(texts)
     print(f"corpus: {len(texts)} text fields, {len(boilerplate)} boilerplate lines found\n")
 
+    # The set depends on which files were in outputs/ at the time, so record it
+    # next to the results: otherwise a rerun on a larger corpus silently
+    # produces different text and there is no way to tell what was dropped.
+    (OUTPUTS / "boilerplate_lines.json").write_text(
+        json.dumps(sorted(boilerplate), ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
     for path, records in corpus.items():
+        if not records:
+            print(f"{path.name}: no records, skipped\n")
+            continue
         processed = process_records(records, boilerplate)
         check_structure(records, processed)
 
@@ -65,16 +76,18 @@ def main():
             json.dumps(processed, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
-        field = next(f for f in TEXT_FIELDS if isinstance(records[0].get(f), str))
+        field = next((f for f in TEXT_FIELDS if isinstance(records[0].get(f), str)), None)
         before = sum(len(r[f]) for r in records for f in TEXT_FIELDS if isinstance(r.get(f), str))
         after = sum(len(r[f]) for r in processed for f in TEXT_FIELDS if isinstance(r.get(f), str))
+        removed = f"{100 - after * 100 // before}% removed" if before else "no text"
 
         print("=" * 78)
         print(f"{path.name}  ->  {destination.name}")
         print(f"{len(records)} records, id kept, structure identical")
-        print(f"text {before} -> {after} chars ({100 - after * 100 // before}% removed)")
-        print(f"\nBEFORE  id={records[0]['id']}  {field}:\n  {preview(records[0][field])}")
-        print(f"\nAFTER   id={processed[0]['id']}  {field}:\n  {preview(processed[0][field])}\n")
+        print(f"text {before} -> {after} chars ({removed})")
+        if field:
+            print(f"\nBEFORE  id={records[0]['id']}  {field}:\n  {preview(records[0][field])}")
+            print(f"\nAFTER   id={processed[0]['id']}  {field}:\n  {preview(processed[0][field])}\n")
 
 
 if __name__ == "__main__":
