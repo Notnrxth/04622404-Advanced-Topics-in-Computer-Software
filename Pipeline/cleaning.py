@@ -24,6 +24,11 @@ from collections import Counter
 # Text fields across both schemas; a record only has the ones its source uses.
 TEXT_FIELDS = ("description", "jobDescription", "jobExcerpt")
 
+# jobExcerpt is the opening of jobDescription, which is usually the company
+# blurb, so corpus boilerplate would empty the field out. It still gets HTML
+# stripping, in-field dedup and normalization.
+KEEP_BOILERPLATE_FIELDS = ("jobExcerpt",)
+
 # Tags that end a visual block become a line break before all tags are dropped,
 # otherwise "<li>a</li><li>b</li>" would collapse into "ab".
 _BLOCK_TAG = re.compile(r"</?(?:p|div|br|li|ul|ol|h[1-6]|tr|table|section)\b[^>]*>", re.I)
@@ -94,6 +99,7 @@ def process_records(records, boilerplate=frozenset()):
         updated = dict(record)
         for field in TEXT_FIELDS:
             if isinstance(updated.get(field), str):
-                updated[field] = normalize(clean(updated[field], boilerplate))
+                drop = frozenset() if field in KEEP_BOILERPLATE_FIELDS else boilerplate
+                updated[field] = normalize(clean(updated[field], drop))
         processed.append(updated)
     return processed

@@ -10,7 +10,12 @@ them, and prints a before/after sample plus a check that no record lost its
 import json
 from pathlib import Path
 
-from cleaning import TEXT_FIELDS, collect_boilerplate, process_records
+from cleaning import (
+    KEEP_BOILERPLATE_FIELDS,
+    TEXT_FIELDS,
+    collect_boilerplate,
+    process_records,
+)
 
 OUTPUTS = Path(__file__).resolve().parent / "outputs"
 PREVIEW = 320
@@ -38,13 +43,15 @@ def main():
     corpus = {path: json.loads(path.read_text(encoding="utf-8")) for path in sources}
 
     # Boilerplate is collected across every file: the same company blurb shows
-    # up in postings that landed in different files.
+    # up in postings that landed in different files. Fields excluded from
+    # boilerplate removal are left out of the count too, otherwise an excerpt
+    # would count as a second document for its own posting.
     texts = [
         record[field]
         for records in corpus.values()
         for record in records
         for field in TEXT_FIELDS
-        if isinstance(record.get(field), str)
+        if field not in KEEP_BOILERPLATE_FIELDS and isinstance(record.get(field), str)
     ]
     boilerplate = collect_boilerplate(texts)
     print(f"corpus: {len(texts)} text fields, {len(boilerplate)} boilerplate lines found\n")
