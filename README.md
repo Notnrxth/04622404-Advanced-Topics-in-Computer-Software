@@ -19,5 +19,5 @@ The course follows the official course description and extends it with modern AI
 
 | Week | My part | Folder |
 |---|---|---|
-| 1 | Embedding (LLM data pipeline, stage 5) | [`week1/`](week1/) |
-| 2 | LLM Retrieval System (RAG pipeline over a Thai fruit guide) | [`week2/`](week2/) |
+| 1 | Embedding (LLM data pipeline, stage 5) | [`LAB_01/`](LAB_01/) |
+| 2 | LLM Retrieval System (RAG pipeline over a Thai fruit guide) | [`LAB_02/`](LAB_02/) |
