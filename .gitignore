@@ -21,6 +21,7 @@ env/
 *.key
 embedding_cache/
 *.pkl
+!LAB_03/vector_db/bm25_index.pkl
 outputs/embeddings_*.json
 
 # OS / IDE

@@ -1,0 +1,13 @@
+{
+  "file": {
+    "size": 60149,
+    "mtime": 1787076563
+  },
+  "settings": {
+    "CHUNK_SIZE": 400,
+    "CHUNK_OVERLAP": 50,
+    "EMBEDDING_MODEL_NAME": "paraphrase-multilingual-MiniLM-L12-v2"
+  },
+  "n_chunks": 58,
+  "source_file": "first_aid_q_a.txt"
+}
