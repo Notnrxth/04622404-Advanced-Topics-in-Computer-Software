@@ -1,9 +1,9 @@
 """Persistent football snapshots. Only this service writes the football schema."""
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import JSON, DateTime, Integer, MetaData, String, Text
+from sqlalchemy import JSON, Date, DateTime, Integer, MetaData, String, Text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -79,6 +79,24 @@ class ServiceState(Base):
 
     key: Mapped[str] = mapped_column(String(64), primary_key=True)
     value: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class IndexTask(Base):
+    __tablename__ = "index_tasks"
+
+    doc_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    action: Mapped[str] = mapped_column(String(24), nullable=False)
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    request_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+
+class ApiQuota(Base):
+    __tablename__ = "api_quota"
+
+    utc_day: Mapped[date] = mapped_column(Date, primary_key=True)
+    used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
 def make_database(url: str):

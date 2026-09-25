@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     football_data_api_key: str = ""
     football_data_base_url: str = "https://api.football-data.org/v4"
     api_football_key: str = ""
+    api_football_base_url: str = "https://v3.football.api-sports.io"
+    api_football_league_id: int = 39
     api_football_daily_limit: int = 90
     retrieval_url: str = "http://retrieval:8000"
     generation_url: str = "http://generation:8000"

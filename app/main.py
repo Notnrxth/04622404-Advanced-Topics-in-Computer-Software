@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from contextvars import ContextVar
@@ -89,7 +90,21 @@ def create_app(
             if schema_for(settings.database_url):
                 await conn.execute(text("CREATE SCHEMA IF NOT EXISTS football"))
             await conn.run_sync(Base.metadata.create_all)
+
+        async def restore_pending_index() -> None:
+            try:
+                await service.reconcile_index()
+            except ServiceError:
+                pass
+
+        repair_task = asyncio.create_task(restore_pending_index())
         yield
+        if not repair_task.done():
+            repair_task.cancel()
+            try:
+                await repair_task
+            except asyncio.CancelledError:
+                pass
         if owns_http:
             await http.aclose()
         await engine.dispose()
@@ -181,10 +196,21 @@ def create_app(
 
     @app.post("/ingest/run", status_code=202)
     async def ingest(body: IngestRequest, background: BackgroundTasks):
+        if body.scope in ("details", "all"):
+            if not settings.api_football_key:
+                raise ServiceError("UPSTREAM_UNAVAILABLE", 502, "ยังไม่ได้ตั้ง API_FOOTBALL_KEY")
+            quota = (await service.status())["quota"]
+            if quota["api_football_used_today"] >= quota["api_football_limit"]:
+                raise ServiceError("QUOTA_EXHAUSTED", 429, "ครบโควตา API-Football วันนี้แล้ว")
         request_id = request_id_var.get()
         job_id = await service.start_job("ingest", body.scope, body.triggered_by, request_id)
         background.add_task(service.run_ingest, job_id, body.scope, request_id)
         return {"job_id": job_id, "scope": body.scope}
+
+    @app.post("/index/reconcile", status_code=202)
+    async def reconcile_index(background: BackgroundTasks):
+        background.add_task(service.reconcile_index)
+        return {"queued": True}
 
     @app.post("/reports/weekly/run", status_code=202)
     async def generate_report(body: GenerateReportRequest, background: BackgroundTasks):

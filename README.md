@@ -5,9 +5,12 @@ FastAPI service สำหรับข้อมูลพรีเมียร์�
 ## สิ่งที่มีแล้ว
 
 - `GET /health`, `/ready`, `/football/status`, `/football/teams`, `/football/standings`, `/football/fixtures`, `/football/matches/{match_id}`
-- `POST /ingest/run` รับ `scope=fixtures` แล้วสร้าง job เพื่อดึง teams, matches, standings, scorers จาก football-data.org v4 บันทึกในฐานข้อมูล และ upsert เอกสาร match/standings/fixtures ไปโมดูล 05
+- `POST /ingest/run` รับ `scope=fixtures|details|all`: ดึง teams, matches, standings, scorers จาก football-data.org v4 และรายละเอียดนัดที่จบแล้วจาก API-Football; `details`/`all` ต้องตั้ง `API_FOOTBALL_KEY` ไม่เช่นนั้นตอบข้อผิดพลาดก่อนสร้าง job
+- เก็บ API-Football quota ในฐานข้อมูล (จำกัด 90 คำขอต่อวัน UTC รวม retry), จับคู่ fixture จากวันเวลาและทีม, และเก็บ events/lineups/statistics ใน payload ของแมตช์
+- บันทึกงานส่ง index ในฐานข้อมูลและส่งซ้ำด้วย `POST /index/reconcile` หรือเมื่อแอปเริ่มใหม่; `/football/status` แสดงจำนวนงานค้างและ quota แยกจากสถานะข้อมูลใน DB
 - `GET /jobs`, `/jobs/{job_id}` สำหรับติดตาม job; ป้องกันการสั่ง job ชนิดเดียวกันซ้ำในระดับแอป
-- `POST /reports/weekly/run` เรียกโมดูล 06 เพื่อสร้าง draft เมื่อแมตช์วีคจบครบ, รายการ/อ่าน/แก้ไข/publish/unpublish รายงาน; publish และ unpublish อัปเดต index ของโมดูล 05 ก่อนเปลี่ยนสถานะ
+- `POST /reports/weekly/run` เรียกโมดูล 06 เพื่อสร้าง draft เมื่อแมตช์วีคจบครบ โดยสร้าง snapshot ตารางคะแนนย้อนหลังจากผลแข่งได้เมื่อ `currentMatchday` ขยับไปแล้ว; รายการ/อ่าน/แก้ไข/publish/unpublish รายงาน โดยมีงานชดเชยกรณีอัปเดต index สำเร็จแต่ DB commit ล้ม
+- เก็บ Markdown ภาษาไทยไว้แสดงผล แต่สร้างข้อความค้นหาภาษาอังกฤษจากผลแข่งและตารางคะแนนที่ตรวจสอบได้สำหรับ index; มีชื่อเล่นไทยครบ 20 ทีมของฤดูกาล 2026/27
 - `X-Request-ID` และ Problem-JSON, เวลา Asia/Bangkok, `team_id` จาก football-data.org
 
 ฐานข้อมูลใช้ schema `football` ใน PostgreSQL และสร้างตารางเมื่อแอปเริ่ม (`create_all`) ส่วน SQLite ใช้สำหรับพัฒนาในเครื่อง ยังต้องเพิ่ม Alembic ก่อน deploy จริง
@@ -26,6 +29,7 @@ PowerShell:
 ```powershell
 $env:DATABASE_URL = "sqlite+aiosqlite:///./football_data.db"
 $env:FOOTBALL_DATA_API_KEY = "<key ของตัวเอง>"
+$env:API_FOOTBALL_KEY = "<key ของตัวเอง>" # ต้องมีเมื่อใช้ details/all
 $env:RETRIEVAL_URL = "http://localhost:8005"
 $env:GENERATION_URL = "http://localhost:8006"
 .venv/Scripts/uvicorn app.main:app --reload --port 8007
@@ -37,13 +41,12 @@ $env:GENERATION_URL = "http://localhost:8006"
 Invoke-RestMethod -Method Post -Uri http://localhost:8007/ingest/run -ContentType application/json -Body '{"scope":"fixtures","triggered_by":"beat"}'
 ```
 
-ดูสถานะด้วย `GET /jobs/{job_id}` และอ่าน API ที่ `/docs` ได้ เทสด้วย `pytest -q` และตรวจโค้ดด้วย `ruff check .`
+ดูสถานะด้วย `GET /jobs/{job_id}` และอ่าน API ที่ `/docs` ได้ เทสด้วย `pytest -q` และตรวจโค้ดด้วย `ruff check .` กับ `ruff format --check .` การทดสอบ integration ในเครื่องใช้บริการจำลอง ไม่เรียก API จริง
 
 ## งานที่ต้องทำต่อ
 
-- Adapter API-Football: map fixture ID ระหว่างสองแหล่ง, ดึง events/lineups/statistics เฉพาะนัดจบแล้ว, เก็บและบังคับ quota 90 ครั้ง/วัน; ตอนนี้ `scope=details` และ `scope=all` จบเป็น job `failed` พร้อม `NOT_IMPLEMENTED` ใน detail
-- ระหว่างที่ยังไม่มี adapter ดังกล่าว ค่า `api_football_used_today` ใน `/football/status` เป็น `0` เสมอ
-- เพิ่มชื่อเล่นไทยของทีมที่เหลือให้ครบทั้ง 20 ทีมของฤดูกาลจริงใน `app/team_aliases.json` (ตอนนี้มี 8 ทีมหลัก; ชื่อทางการของทุกทีมจะถูกเติมอัตโนมัติจาก API)
-- เพิ่ม migration, ล็อก job ระดับฐานข้อมูลสำหรับหลาย worker, ทดสอบ integration กับ 05/06 และตรวจข้อมูลกับเว็บทางการ
+- เพิ่ม Alembic migration และทดสอบกับ PostgreSQL schema `football` จริง
+- เพิ่ม lock/job queue ระดับฐานข้อมูลสำหรับหลาย worker และการกู้ job ที่ค้างเมื่อ process หยุด
+- ทดสอบร่วมกับบริการ 05/06 และ API ภายนอกจริงหลังพร้อมใช้งาน รวมถึงตรวจความตรงของ alias และ fixture mapping กับข้อมูลจริง
 
 ไม่ต้องใส่ API key ใน repository ให้ตั้งผ่าน environment หรือไฟล์ `.env` ที่ถูก ignore เท่านั้น

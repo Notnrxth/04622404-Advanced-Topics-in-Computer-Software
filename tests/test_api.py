@@ -26,3 +26,9 @@ async def test_health_status_and_not_found(tmp_path):
             assert missing.headers["content-type"].startswith("application/problem+json")
             assert missing.json()["code"] == "NOT_FOUND"
             assert missing.json()["request_id"] == missing.headers["X-Request-ID"]
+            unsupported = await client.post(
+                "/ingest/run", json={"scope": "details", "triggered_by": "beat"}
+            )
+            assert unsupported.status_code == 502
+            assert unsupported.json()["code"] == "UPSTREAM_UNAVAILABLE"
+            assert (await client.get("/jobs")).json()["jobs"] == []
