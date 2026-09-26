@@ -91,23 +91,18 @@ def create_app(
                 await conn.execute(text("CREATE SCHEMA IF NOT EXISTS football"))
             await conn.run_sync(Base.metadata.create_all)
 
-        async def restore_pending_index() -> None:
-            try:
-                await service.reconcile_index()
-            except ServiceError:
-                pass
-
-        repair_task = asyncio.create_task(restore_pending_index())
-        yield
-        if not repair_task.done():
+        repair_task = asyncio.create_task(service.run_index_worker())
+        try:
+            yield
+        finally:
             repair_task.cancel()
             try:
                 await repair_task
             except asyncio.CancelledError:
                 pass
-        if owns_http:
-            await http.aclose()
-        await engine.dispose()
+            if owns_http:
+                await http.aclose()
+            await engine.dispose()
 
     app = FastAPI(
         title="Football Assistant — Football Data",

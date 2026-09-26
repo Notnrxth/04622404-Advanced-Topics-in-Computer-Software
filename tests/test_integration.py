@@ -10,7 +10,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import Settings
-from app.db import Match, WeeklyReport
+from app.db import Match, Standing, WeeklyReport
 from app.football import current_season, match_payload
 from app.main import create_app
 from app.service import ServiceError
@@ -51,7 +51,8 @@ def report_payload(season: str, matchweek: int) -> dict:
 
 
 @pytest.mark.asyncio
-async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path):
+@pytest.mark.parametrize("legacy_snapshot", [False, True])
+async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, legacy_snapshot):
     season = current_season()
     indexed = {}
     fail_once = {"value": True}
@@ -101,7 +102,19 @@ async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path):
                 },
             )
         if path.endswith("/scorers"):
-            return httpx.Response(200, json={"scorers": []})
+            return httpx.Response(
+                200,
+                json={
+                    "scorers": [
+                        {
+                            "player": {"name": "Example Striker"},
+                            "team": {"id": 57},
+                            "goals": 7,
+                            "assists": 2,
+                        }
+                    ]
+                },
+            )
         if path == "/index/upsert":
             if fail_once["value"]:
                 fail_once["value"] = False
@@ -124,22 +137,39 @@ async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path):
     app = create_app(settings, http=upstream_client)
     async with app.router.lifespan_context(app):
         service = app.state.service
+        if legacy_snapshot:
+            async with service.sessions() as db:
+                db.add(
+                    Standing(
+                        season=season,
+                        matchweek=5,
+                        payload={"season": season, "matchweek": 5, "rows": []},
+                    )
+                )
+                await db.commit()
         with pytest.raises(ServiceError) as ingest_error:
             await service._ingest_primary(str(uuid4()))
         assert ingest_error.value.code == "INDEX_UPDATE_FAILED"
         status = await service.status()
         assert status["index_sync"]["pending"] > 0
-        assert (await service.standings(season))["matchweek"] == 6
+        assert (await service.standings(season))["matchweek"] == 5
+        assert status["current_matchweek"] == 5
 
         await service.reconcile_index()
         assert (await service.status())["index_sync"]["pending"] == 0
         assert f"standings-{season}-mw05" in indexed
         assert f"match-{season}-mw05-57-61" in indexed
+        live = indexed[f"standings-{season}-mw06"]
+        assert "Live standings during matchweek 6" in live["title"]
+        assert "Example Striker (Arsenal FC): 7 goals" in live["text"]
+        assert live["category"] == "standings"
 
         await service._create_report(season, 5, str(uuid4()))
         report = await service.report(season, 5, published=False)
         assert report["status"] == "draft"
         assert "Arsenal FC 2-1 Chelsea FC" in report["search_text_en"]
+        edited = await service.edit_report(season, 5, None, "แก้บทความ ไม่ใช่ผลการแข่งขัน", "beat")
+        assert edited["search_text_en"] == report["search_text_en"]
     await upstream_client.aclose()
 
 

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -38,6 +40,16 @@ from app.football import (
 )
 
 BANGKOK = ZoneInfo("Asia/Bangkok")
+INDEX_MAX_BYTES = 5_000_000
+logger = logging.getLogger(__name__)
+
+
+def index_body(documents: list[dict], request_id: str) -> bytes:
+    return json.dumps(
+        {"request_id": request_id, "documents": documents},
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
 
 
 class ServiceError(Exception):
@@ -61,11 +73,14 @@ def job_dict(row: Job) -> dict:
 
 def report_doc(report: dict) -> dict:
     season, week = report["season"], report["matchweek"]
+    if not report.get("search_text_en"):
+        raise ServiceError(
+            "INDEX_UPDATE_FAILED", 502, "Report search text requires source-data backfill"
+        )
     return {
         "doc_id": f"weekly-{season}-mw{week:02d}",
         "title": f"Premier League {season} matchweek {week} summary",
-        "text": report.get("search_text_en")
-        or f"Premier League {season}, matchweek {week}. Weekly results and standings.",
+        "text": report["search_text_en"],
         "category": "weekly_report",
         "origin": "generated",
         "season": season,
@@ -108,20 +123,32 @@ class FootballService:
         self._report_lock = asyncio.Lock()
         self._quota_lock = asyncio.Lock()
 
+    @staticmethod
+    async def _latest_standing(db: AsyncSession, season: str) -> Standing | None:
+        rows = list(
+            await db.scalars(
+                select(Standing)
+                .where(Standing.season == season)
+                .order_by(Standing.matchweek.desc())
+            )
+        )
+        return next(
+            (row for row in rows if row.payload.get("snapshot_type") == "completed"),
+            rows[0] if rows else None,
+        )
+
     async def status(self) -> dict:
         season = current_season()
         async with self.sessions() as db:
             state = await db.get(ServiceState, "last_ingest_at")
             sync_state = await db.get(ServiceState, "last_index_sync_at")
             pending = await db.scalar(select(func.count()).select_from(IndexTask))
+            error = await db.scalar(
+                select(IndexTask.last_error).where(IndexTask.last_error.is_not(None)).limit(1)
+            )
             today = datetime.now(UTC).date()
             quota = await db.get(ApiQuota, today)
-            standing = await db.scalar(
-                select(Standing)
-                .where(Standing.season == season)
-                .order_by(Standing.matchweek.desc())
-                .limit(1)
-            )
+            standing = await self._latest_standing(db, season)
             reports = await db.scalars(
                 select(WeeklyReport).where(
                     WeeklyReport.season == season, WeeklyReport.status == "published"
@@ -141,6 +168,7 @@ class FootballService:
             },
             "index_sync": {
                 "pending": pending,
+                "last_error": error,
                 "last_synced_at": sync_state.value if sync_state else None,
             },
         }
@@ -162,12 +190,8 @@ class FootballService:
     async def _send_index(self, action: str, document: dict | None, doc_id: str, request_id: str):
         base_url = self.settings.retrieval_url.rstrip("/")
         if action == "upsert":
-            response = await self.http.post(
-                f"{base_url}/index/upsert",
-                json={"request_id": request_id, "documents": [document]},
-                headers={"X-Request-ID": request_id},
-                timeout=30,
-            )
+            await self._send_upserts([document], request_id)
+            return
         else:
             response = await self.http.delete(
                 f"{base_url}/index/{doc_id}",
@@ -176,13 +200,94 @@ class FootballService:
             )
         response.raise_for_status()
 
+    async def _send_upserts(self, documents: list[dict], request_id: str) -> None:
+        if (
+            any(doc.get("category") == "historical" for doc in documents)
+            and not self.settings.historical_index_enabled
+        ):
+            raise ServiceError(
+                "INDEX_UPDATE_FAILED", 502, "Historical CONTRACT/05 integration is not enabled"
+            )
+        body = index_body(documents, request_id)
+        if not 1 <= len(documents) <= 100 or len(body) > INDEX_MAX_BYTES:
+            raise ServiceError("INDEX_UPDATE_FAILED", 502, "Index batch exceeds contract limits")
+        response = await self.http.post(
+            f"{self.settings.retrieval_url.rstrip('/')}/index/upsert",
+            content=body,
+            headers={"X-Request-ID": request_id, "Content-Type": "application/json"},
+            timeout=30,
+        )
+        response.raise_for_status()
+
+    async def run_index_worker(self) -> None:
+        """Keep replaying the durable outbox; cancellation leaves pending tasks in DB."""
+        delay = self.settings.index_retry_seconds
+        while True:
+            try:
+                await self.reconcile_index()
+                delay = self.settings.index_retry_seconds
+            except Exception:
+                logger.exception("Index replay failed; retrying with backoff")
+                delay = min(delay * 2, self.settings.index_retry_max_seconds)
+            await asyncio.sleep(delay)
+
+    async def _replay_upsert_batch(self, doc_ids: list[str]) -> None:
+        async with self.sessions() as db:
+            tasks = list(
+                await db.scalars(
+                    select(IndexTask)
+                    .where(IndexTask.doc_id.in_(doc_ids), IndexTask.action == "upsert")
+                    .order_by(IndexTask.updated_at, IndexTask.doc_id)
+                    .with_for_update()
+                )
+            )
+            if not tasks:
+                return
+            try:
+                await self._send_upserts([task.payload for task in tasks], tasks[0].request_id)
+            except (httpx.HTTPError, ValueError, ServiceError) as exc:
+                for task in tasks:
+                    task.last_error = str(exc)
+                await db.commit()
+                raise ServiceError("INDEX_UPDATE_FAILED", 502, str(exc)) from exc
+            for task in tasks:
+                await db.delete(task)
+            await db.merge(ServiceState(key="last_index_sync_at", value=now_iso()))
+            await db.commit()
+
     async def reconcile_index(self) -> None:
         """Replay persisted writes; report tasks follow the durable DB publication state."""
         async with self._index_lock:
             async with self.sessions() as db:
-                ids = (
-                    await db.scalars(select(IndexTask.doc_id).order_by(IndexTask.updated_at))
-                ).all()
+                tasks = list(
+                    await db.scalars(
+                        select(IndexTask).order_by(IndexTask.updated_at, IndexTask.doc_id)
+                    )
+                )
+            batches, batch, documents = [], [], []
+            ids = []
+            for task in tasks:
+                if task.action != "upsert":
+                    ids.append(task.doc_id)
+                    continue
+                candidate = [*documents, task.payload]
+                if batch and (
+                    len(candidate)
+                    > (50 if any(doc.get("category") == "historical" for doc in candidate) else 100)
+                    or len(index_body(candidate, task.request_id)) > INDEX_MAX_BYTES
+                ):
+                    batches.append(batch)
+                    batch, documents = [], []
+                batch.append(task.doc_id)
+                documents.append(task.payload)
+            if batch:
+                batches.append(batch)
+            first_error = None
+            for batch_ids in batches:
+                try:
+                    await self._replay_upsert_batch(batch_ids)
+                except ServiceError as exc:
+                    first_error = first_error or exc
             for doc_id in ids:
                 async with self.sessions() as db:
                     task = await db.get(IndexTask, doc_id, with_for_update=True)
@@ -194,7 +299,7 @@ class FootballService:
                         if updated_at.tzinfo is None:
                             updated_at = updated_at.replace(tzinfo=BANGKOK)
                         age = datetime.now(BANGKOK) - updated_at
-                        if age < timedelta(minutes=2):
+                        if age < timedelta(seconds=self.settings.index_transition_timeout_seconds):
                             continue
                         action = "reconcile_report"
                     if action == "reconcile_report":
@@ -205,16 +310,32 @@ class FootballService:
                             )
                         )
                         action = "upsert" if report and report.status == "published" else "delete"
-                        document = report_doc(report.payload) if action == "upsert" else None
+                        if action == "upsert":
+                            try:
+                                await self._backfill_report_search(db, report)
+                                document = report_doc(report.payload)
+                            except ServiceError as exc:
+                                task.last_error = str(exc)
+                                await db.commit()
+                                first_error = first_error or exc
+                                continue
+                        else:
+                            document = None
                     try:
                         await self._send_index(action, document, doc_id, task.request_id)
                     except (httpx.HTTPError, ValueError) as exc:
                         task.last_error = str(exc)
                         await db.commit()
-                        raise ServiceError("INDEX_UPDATE_FAILED", 502, str(exc)) from exc
+                        first_error = first_error or ServiceError(
+                            "INDEX_UPDATE_FAILED", 502, str(exc)
+                        )
+                        continue
                     await db.delete(task)
                     await db.merge(ServiceState(key="last_index_sync_at", value=now_iso()))
                     await db.commit()
+
+            if first_error:
+                raise first_error
 
     async def teams(self) -> dict:
         async with self.sessions() as db:
@@ -223,12 +344,7 @@ class FootballService:
 
     async def standings(self, season: str | None) -> dict:
         async with self.sessions() as db:
-            row = await db.scalar(
-                select(Standing)
-                .where(Standing.season == (season or current_season()))
-                .order_by(Standing.matchweek.desc())
-                .limit(1)
-            )
+            row = await self._latest_standing(db, season or current_season())
             if row is None:
                 raise ServiceError("NOT_FOUND", 404, "ยังไม่มีตารางคะแนนของฤดูกาลนี้")
             return row.payload
@@ -405,9 +521,13 @@ class FootballService:
         matches = [match_payload(item, fetched_at) for item in matches_raw.get("matches", [])]
         standing = standing_payload(standings_raw, season, fetched_at)
         scorers = scorer_payload(scorers_raw)
+        completed_weeks = completed_matchweeks(matches)
+        standing["snapshot_type"] = (
+            "completed" if standing["matchweek"] in completed_weeks else "live"
+        )
         derived = [
             derive_standings(matches, teams, season, week, fetched_at)
-            for week in completed_matchweeks(matches)
+            for week in completed_weeks
             if week != standing["matchweek"]
         ]
         async with self.sessions() as db:
@@ -438,16 +558,24 @@ class FootballService:
             )
             derived_for_index = []
             for snapshot in derived:
+                snapshot["snapshot_type"] = "completed"
                 key = (season, snapshot["matchweek"])
                 existing_snapshot = await db.get(Standing, key)
                 if existing_snapshot is None or existing_snapshot.payload.get("provisional"):
                     await db.merge(Standing(season=season, matchweek=key[1], payload=snapshot))
                     derived_for_index.append(snapshot)
+                elif existing_snapshot.payload.get("snapshot_type") != "completed":
+                    # Preserve official facts stored before snapshot labels were introduced.
+                    existing_snapshot.payload = {
+                        **existing_snapshot.payload,
+                        "snapshot_type": "completed",
+                    }
+                    derived_for_index.append(existing_snapshot.payload)
             await db.merge(
                 Scorers(season=season, payload={"items": scorers, "fetched_at": fetched_at})
             )
             await db.merge(ServiceState(key="last_ingest_at", value=fetched_at))
-            documents = self._documents(matches, standing, season, fetched_at)
+            documents = self._documents(matches, standing, season, fetched_at, scorers)
             for snapshot in derived_for_index:
                 documents.extend(self._documents([], snapshot, season, fetched_at))
             await self._queue_documents(db, documents, request_id)
@@ -517,7 +645,13 @@ class FootballService:
                 await self.reconcile_index()
 
     @staticmethod
-    def _documents(matches: list[dict], standing: dict, season: str, fetched_at: str) -> list[dict]:
+    def _documents(
+        matches: list[dict],
+        standing: dict,
+        season: str,
+        fetched_at: str,
+        scorers: list[dict] | None = None,
+    ) -> list[dict]:
         documents = []
         for match in matches:
             if match["status"] != "FINISHED" or match["matchweek"] is None:
@@ -558,17 +692,30 @@ class FootballService:
         week = standing.get("matchweek")
         if week is not None:
             rows = standing["rows"]
+            label = (
+                f"Live standings during matchweek {week}"
+                if standing.get("snapshot_type") == "live"
+                else f"Standings after matchweek {week}"
+            )
+            text = f"## {label}\n" + "\n".join(
+                f"{r['position']}. {r['name']}: {r['points']} points, "
+                f"played {r['played']}, goal difference {r['goal_difference']}"
+                for r in rows
+            )
+            if scorers:
+                names = {row["team_id"]: row["name"] for row in rows}
+                text += f"\n## Current top scorers / Golden Boot as of {fetched_at}\n"
+                text += "\n".join(
+                    f"{rank}. {scorer['player']} "
+                    f"({names.get(scorer['team_id'], scorer['team_id'])}): "
+                    f"{scorer['goals']} goals, {scorer['assists']} assists."
+                    for rank, scorer in enumerate(scorers, start=1)
+                )
             documents.append(
                 {
                     "doc_id": f"standings-{season}-mw{week:02d}",
-                    "title": f"Premier League {season} standings after matchweek {week}",
-                    "text": "## Standings\n"
-                    + "\n".join(
-                        f"{r['position']}. {r['name']}: {r['points']} points, "
-                        f"played {r['played']}, "
-                        f"goal difference {r['goal_difference']}"
-                        for r in rows
-                    ),
+                    "title": f"Premier League {season} {label}",
+                    "text": text,
                     "category": "standings",
                     "origin": "football-data.org",
                     "season": season,
@@ -661,6 +808,30 @@ class FootballService:
             await db.commit()
             return payload
 
+    async def _backfill_report_search(self, db: AsyncSession, row: WeeklyReport) -> None:
+        if row.payload.get("search_text_en"):
+            return
+        standing = await db.get(Standing, (row.season, row.matchweek))
+        matches = list(
+            await db.scalars(
+                select(Match).where(Match.season == row.season, Match.matchweek == row.matchweek)
+            )
+        )
+        if not standing or not matches:
+            raise ServiceError(
+                "NOT_FOUND", 409, "Cannot backfill report search without source match/standing data"
+            )
+        payload = dict(row.payload)
+        payload["search_text_en"] = report_search_text(
+            row.season,
+            row.matchweek,
+            [match.payload for match in matches],
+            standing.payload["rows"],
+            [],
+        )
+        payload["search_text_policy"] = "source_facts"
+        row.payload = payload
+
     async def _transition_report(
         self, season: str, matchweek: int, actor: str, request_id: str, publish: bool
     ) -> dict:
@@ -678,6 +849,8 @@ class FootballService:
                     return row.payload
                 if await db.get(IndexTask, doc_id):
                     raise ServiceError("JOB_ALREADY_RUNNING", 409, "รายงานนี้กำลังเปลี่ยนสถานะ")
+                if publish:
+                    await self._backfill_report_search(db, row)
                 db.add(
                     IndexTask(
                         doc_id=doc_id,
@@ -817,6 +990,7 @@ class FootballService:
             "search_text_en": report_search_text(
                 season, matchweek, match_data, standings_data, scorers_data
             ),
+            "search_text_policy": "source_facts",
             "status": "draft",
             "generated_at": now_iso(),
             "data_as_of": min(row["fetched_at"] for row in match_data),

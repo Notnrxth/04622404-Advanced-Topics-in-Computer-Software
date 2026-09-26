@@ -1,5 +1,6 @@
 """Configuration is read from environment variables at startup."""
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +17,10 @@ class Settings(BaseSettings):
     retrieval_url: str = "http://retrieval:8000"
     generation_url: str = "http://generation:8000"
     report_auto_publish: bool = False
+    historical_index_enabled: bool = False
+    index_retry_seconds: float = Field(default=2, gt=0)
+    index_retry_max_seconds: float = Field(default=60, gt=0)
+    index_transition_timeout_seconds: float = Field(default=120, gt=0)
     version: str = "0.1.0"
 
 

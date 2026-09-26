@@ -99,6 +99,24 @@ class ApiQuota(Base):
     used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class HistoricalMatch(Base):
+    __tablename__ = "historical_matches"
+
+    match_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    season: Mapped[str] = mapped_column(String(4), index=True)
+    home_slug: Mapped[str] = mapped_column(String(64), index=True)
+    away_slug: Mapped[str] = mapped_column(String(64), index=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
+class HistoricalStanding(Base):
+    __tablename__ = "historical_standings"
+
+    season: Mapped[str] = mapped_column(String(4), primary_key=True)
+    club_slug: Mapped[str] = mapped_column(String(64), primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
 def make_database(url: str):
     # SQLite does not support schemas; translate this service's schema for local development.
     options = {"schema_translate_map": {"football": None}} if schema_for(url) is None else {}

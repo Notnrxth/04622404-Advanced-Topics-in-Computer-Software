@@ -1,4 +1,34 @@
-from app.football import match_payload, scorer_payload, standing_payload, team_payload
+from app.football import ALIASES, match_payload, scorer_payload, standing_payload, team_payload
+
+
+def test_thai_nicknames_cover_all_2026_27_premier_league_clubs():
+    nicknames = {
+        "AFC Bournemouth": "ลูกเชอร์รี่",
+        "Arsenal": "ปืนใหญ่",
+        "Aston Villa": "สิงโตผงาด",
+        "Brentford": "ผึ้งพิฆาต",
+        "Brighton & Hove Albion": "นกนางนวล",
+        "Chelsea": "สิงห์บลูส์",
+        "Coventry City": "ช้างกระทืบโรง",
+        "Crystal Palace": "ปราสาทเรือนแก้ว",
+        "Everton": "ทอฟฟี่สีน้ำเงิน",
+        "Fulham": "เจ้าสัวน้อย",
+        "Hull City": "ไอ้เสือน้อย",
+        "Ipswich Town": "ม้าขาว",
+        "Leeds United": "ยูงทอง",
+        "Liverpool": "หงส์แดง",
+        "Manchester City": "เรือใบสีฟ้า",
+        "Manchester United": "ปีศาจแดง",
+        "Newcastle United": "สาลิกาดง",
+        "Nottingham Forest": "เจ้าป่า",
+        "Sunderland": "แมวดำ",
+        "Tottenham Hotspur": "ไก่เดือยทอง",
+    }
+    assert set(ALIASES) == set(nicknames)
+    for team_id, (name, nickname) in enumerate(nicknames.items(), start=1):
+        raw_name = f"{name} FC" if name != "AFC Bournemouth" else name
+        payload = team_payload({"id": team_id, "name": raw_name})
+        assert nickname in payload["aliases"], name
 
 
 def test_match_payload_uses_stable_id_bangkok_time_and_contract_status():
