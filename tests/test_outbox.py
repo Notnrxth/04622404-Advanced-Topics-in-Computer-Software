@@ -230,3 +230,51 @@ async def test_historical_index_is_gated_and_batches_at_most_50(tmp_path):
         await service.reconcile_index()
         assert requests == [50, 50, 1]
         assert (await service.status())["index_sync"]["pending"] == 0
+
+
+@pytest.mark.asyncio
+async def test_legacy_cleanup_waits_for_replacement_and_retries_failed_delete(tmp_path):
+    season = current_season()
+    old, new = f"standings-{season}-mw05", f"standings-{season}"
+    indexed, deletes = {old: {"old": True}}, []
+    fail_upsert, fail_delete = True, True
+
+    async def transport(request):
+        if request.method == "DELETE":
+            deletes.append(old)
+            if fail_delete:
+                return httpx.Response(503)
+            indexed.pop(old, None)
+        else:
+            if fail_upsert:
+                return httpx.Response(503)
+            indexed.update({d["doc_id"]: d for d in json.loads(request.content)["documents"]})
+        return httpx.Response(200)
+
+    async with local_service(tmp_path, transport) as service:
+        async with service.sessions() as db:
+            await service._queue_documents(
+                db, [{**document(1), "category": "standings", "doc_id": new}], str(uuid4())
+            )
+            db.add(
+                IndexTask(
+                    doc_id=old,
+                    action="delete",
+                    payload={"replacement_doc_id": new},
+                    request_id=str(uuid4()),
+                    updated_at=datetime.now(BANGKOK),
+                )
+            )
+            await db.commit()
+        with pytest.raises(ServiceError):
+            await service.reconcile_index()
+        assert old in indexed and not deletes
+        fail_upsert = False
+        with pytest.raises(ServiceError):
+            await service.reconcile_index()
+        assert old in indexed and new in indexed
+        assert (await service.status())["index_sync"]["pending"] == 1
+        fail_delete = False
+        await service.reconcile_index()
+        assert set(indexed) == {new}
+        assert deletes == [old, old]

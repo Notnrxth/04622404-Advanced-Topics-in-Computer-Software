@@ -294,6 +294,11 @@ class FootballService:
                     if task is None:
                         continue
                     action, document = task.action, task.payload
+                    if action == "delete" and document and document.get("replacement_doc_id"):
+                        replacement = await db.get(IndexTask, document["replacement_doc_id"])
+                        if replacement is not None:
+                            # Do not remove the last old table until the new stable ID is indexed.
+                            continue
                     if action == "transition":
                         updated_at = task.updated_at
                         if updated_at.tzinfo is None:
@@ -556,29 +561,38 @@ class FootballService:
             await db.merge(
                 Standing(season=season, matchweek=standing["matchweek"] or 0, payload=standing)
             )
-            derived_for_index = []
             for snapshot in derived:
                 snapshot["snapshot_type"] = "completed"
                 key = (season, snapshot["matchweek"])
                 existing_snapshot = await db.get(Standing, key)
                 if existing_snapshot is None or existing_snapshot.payload.get("provisional"):
                     await db.merge(Standing(season=season, matchweek=key[1], payload=snapshot))
-                    derived_for_index.append(snapshot)
                 elif existing_snapshot.payload.get("snapshot_type") != "completed":
                     # Preserve official facts stored before snapshot labels were introduced.
                     existing_snapshot.payload = {
                         **existing_snapshot.payload,
                         "snapshot_type": "completed",
                     }
-                    derived_for_index.append(existing_snapshot.payload)
             await db.merge(
                 Scorers(season=season, payload={"items": scorers, "fetched_at": fetched_at})
             )
             await db.merge(ServiceState(key="last_ingest_at", value=fetched_at))
             documents = self._documents(matches, standing, season, fetched_at, scorers)
-            for snapshot in derived_for_index:
-                documents.extend(self._documents([], snapshot, season, fetched_at))
             await self._queue_documents(db, documents, request_id)
+            cleanup_key = f"standings_legacy_cleanup_queued_{season}"
+            if await db.get(ServiceState, cleanup_key) is None:
+                # Durable one-time migration; failed deletes remain retryable in the outbox.
+                for week in range(1, 39):
+                    await db.merge(
+                        IndexTask(
+                            doc_id=f"standings-{season}-mw{week:02d}",
+                            action="delete",
+                            payload={"replacement_doc_id": f"standings-{season}"},
+                            request_id=request_id,
+                            updated_at=datetime.now(BANGKOK),
+                        )
+                    )
+                await db.merge(ServiceState(key=cleanup_key, value=now_iso()))
             await db.commit()
         # The outbox remains in DB if retrieval is unavailable and is safe to replay.
         await self.reconcile_index()
@@ -713,7 +727,7 @@ class FootballService:
                 )
             documents.append(
                 {
-                    "doc_id": f"standings-{season}-mw{week:02d}",
+                    "doc_id": f"standings-{season}",
                     "title": f"Premier League {season} {label}",
                     "text": text,
                     "category": "standings",

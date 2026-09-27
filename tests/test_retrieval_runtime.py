@@ -146,9 +146,20 @@ async def test_real_retrieval_http_ingest_search_publish_and_recovery(tmp_path):
                 app = create_app(settings, http=upstream)
                 async with app.router.lifespan_context(app):
                     service = app.state.service
+                    legacy = service._documents(
+                        [],
+                        {"matchweek": 5, "rows": []},
+                        season,
+                        "2026-09-21T09:00:00+07:00",
+                    )[0]
+                    legacy["doc_id"] = f"standings-{season}-mw05"
+                    assert (
+                        await retrieval.post("/index/upsert", json={"documents": [legacy]})
+                    ).status_code == 200
                     await service._ingest_primary(str(uuid4()))
                     stats = (await retrieval.get("/index/stats")).json()
-                    assert stats["documents"] >= 4
+                    assert stats["documents"] == 4
+                    assert stats["by_category"]["standings"] == 1
                     chunks = await search("Example Striker top scorers 7 goals", "standings", 6)
                     assert any("Example Striker" in chunk["text"] for chunk in chunks)
                     chunks = await search("Arsenal Chelsea 2-1", "match_report", 5)

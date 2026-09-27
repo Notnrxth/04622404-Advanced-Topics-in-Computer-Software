@@ -24,6 +24,7 @@ from app.football import current_season
 from app.history import (
     calculate_table,
     load_fjelstul,
+    load_scorer_sources,
     make_documents,
     normalize,
     parse_season,
@@ -86,7 +87,8 @@ def build_dataset():
         for item in manifest["openfootball"]["files"]
         if item["local"].endswith(".txt")
     }
-    documents = make_documents(seasons, tables, clubs, source_urls)
+    scorers, _validation = load_scorer_sources(raw, clubs, seasons, source_urls)
+    documents = make_documents(seasons, tables, clubs, source_urls, scorers)
     if len({d["doc_id"] for d in documents}) != len(documents):
         raise ValueError("Duplicate historical document ID")
     return seasons, tables, clubs, documents
@@ -141,6 +143,17 @@ async def main(args):
     (generated / "clubs.json").write_text(
         json.dumps(clubs, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    source_urls = {
+        year: next(d["url"] for d in documents if d["doc_id"] == f"hist-team-{year}-arsenal")
+        for year in seasons
+        if any(d["doc_id"] == f"hist-team-{year}-arsenal" for d in documents)
+    }
+    _scorers, validation = load_scorer_sources(
+        ROOT / "data/raw/history", clubs, seasons, source_urls
+    )
+    (generated / "scorer-validation.json").write_text(
+        json.dumps(validation, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     summary = {
         "seasons": len(seasons),
         "matches": sum(map(len, seasons.values())),
@@ -152,6 +165,7 @@ async def main(args):
             for topic in ("season_table", "team_season", "head_to_head")
         },
         "source_commits": PINNED,
+        "scorer_validation": {year: row["status"] for year, row in validation.items()},
     }
     (generated / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     settings = Settings(_env_file=ROOT.parents[1] / ".env", database_url=args.database_url)

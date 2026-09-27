@@ -20,7 +20,7 @@ from scripts.ingest_history import ROOT, build_dataset, persist
     [
         "Arsenal FC  2-1 (1-0)  Chelsea FC",
         "15:00 Arsenal FC v Chelsea FC  2-1 (1-0)",
-        "15:00 Arsenal FC  2-1 (1-0)  Chelsea FC\n (Player A 20';\n Player B 70')",
+        "15:00 Arsenal FC  2-1 (1-0)  Chelsea FC\n (Player A 20', 30';\n Player B 70')",
     ],
 )
 def test_parse_all_three_formats_and_ignore_scorers(line):
@@ -131,6 +131,14 @@ def test_all_pinned_seasons_and_all_team_aliases():
     assert len(clubs) == 51
     assert sum(map(len, tables.values())) == 686
     assert len(docs) == 1661
+    from app.history import season_scorers
+
+    assert [p["goals"] for p in season_scorers(seasons["2025"])[:3]] == [27, 22, 17]
+    assert sum(bool(m.get("goals")) for m in seasons["2025"]) == 353
+    season_docs = {d["doc_id"]: d for d in docs if d["topic"] == "season_table"}
+    assert "## Top scorers" in season_docs["hist-season-2025"]["text"]
+    assert "## Top scorers" not in season_docs["hist-season-2023"]["text"]
+    assert "## Top scorers" not in season_docs["hist-season-2024"]["text"]
     assert max(m["date"] for m in seasons["2019"]) == "2020-07-26"
     assert not any(m["date"].startswith("2019-07") for m in seasons["2019"])
     assert sum(d["topic"] == "head_to_head" for d in docs) == 941
@@ -157,3 +165,62 @@ def test_all_pinned_seasons_and_all_team_aliases():
     }
     assert len(raw_names) == 95
     assert {resolve(name, clubs) for name in raw_names} == set(clubs)
+
+
+def test_scorers_penalties_own_goals_multiple_minutes_and_transfer():
+    from app.history import season_scorers
+
+    matches = parse_season(
+        "# Matches 2\n▪ Matchday 1\nSat Aug 16\nA 3-2 B\n"
+        "(Player One 10', 20'(p), Defender 30'(og); Player Two 40', 90+2')\n"
+        "▪ Matchday 2\nSun Aug 17\nB 1-0 A\n(player ONE 50')",
+        2025,
+    )
+    scorers = season_scorers(matches)
+    one = next(p for p in scorers if p["player"] == "Player One")
+    assert one["goals"] == 3
+    assert one["clubs"] == ["A", "B"]
+    assert not any(p["player"] == "Defender" for p in scorers)
+    assert matches[0]["goals"][1]["penalty"]
+
+
+def test_incomplete_scorers_are_not_estimated():
+    from app.history import season_scorers
+
+    matches = parse_season("# Matches 1\n▪ Matchday 1\nSat Aug 16\nA 1-0 B", 2025)
+    with pytest.raises(ValueError, match="Incomplete"):
+        season_scorers(matches)
+
+
+def test_bad_api_scorer_podium_is_rejected(tmp_path):
+    import hashlib
+    import json
+
+    from app.history import load_scorer_sources
+
+    clubs = {"city": {"aliases": ["Manchester City"]}}
+    raw = tmp_path / "scorers"
+    raw.mkdir()
+    rows = []
+    for name, goals in (("E. Haaland", 27), ("Matheus Cunha", 24), ("C. Palmer", 22)):
+        rows.append(
+            {
+                "player": {"name": name},
+                "statistics": [
+                    {
+                        "league": {"id": 39, "season": 2023},
+                        "team": {"name": "Manchester City"},
+                        "goals": {"total": goals},
+                    }
+                ],
+            }
+        )
+    path = raw / "2023.json"
+    path.write_text(json.dumps({"response": rows}), encoding="utf-8")
+    path.with_suffix(".meta.json").write_text(
+        json.dumps({"sha256": hashlib.sha256(path.read_bytes()).hexdigest()}), encoding="utf-8"
+    )
+    season = [{"home": "city", "away": "other", "home_goals": 0, "away_goals": 0}]
+    sources, validation = load_scorer_sources(tmp_path, clubs, {"2025": season}, {"2025": "pinned"})
+    assert "2023" not in sources
+    assert validation["2023"]["status"] == "rejected"

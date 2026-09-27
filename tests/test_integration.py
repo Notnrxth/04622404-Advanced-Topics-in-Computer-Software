@@ -122,6 +122,9 @@ async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, leg
             for document in json.loads(request.content)["documents"]:
                 indexed[document["doc_id"]] = document
             return httpx.Response(200, json={"upserted": 1})
+        if request.method == "DELETE" and path.startswith("/index/"):
+            indexed.pop(path.removeprefix("/index/"), None)
+            return httpx.Response(200, json={"deleted": True})
         if path == "/report/weekly":
             return httpx.Response(
                 200,
@@ -157,9 +160,10 @@ async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, leg
 
         await service.reconcile_index()
         assert (await service.status())["index_sync"]["pending"] == 0
-        assert f"standings-{season}-mw05" in indexed
+        assert f"standings-{season}" in indexed
+        assert not any(key.startswith(f"standings-{season}-mw") for key in indexed)
         assert f"match-{season}-mw05-57-61" in indexed
-        live = indexed[f"standings-{season}-mw06"]
+        live = indexed[f"standings-{season}"]
         assert "Live standings during matchweek 6" in live["title"]
         assert "Example Striker (Arsenal FC): 7 goals" in live["text"]
         assert live["category"] == "standings"

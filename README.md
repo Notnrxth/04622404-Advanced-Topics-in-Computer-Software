@@ -59,6 +59,8 @@ Worker จะกู้งาน publish/unpublish ที่ค้างหลั
 
 ## งานที่ต้องทำต่อ (integration/deploy)
 
+- รีวิวล่าสุด: ตารางคะแนนใน index เปลี่ยนเป็น `standings-<season>` เดียวพร้อม cleanup แบบ retry ได้; ดาวซัลโวย้อนหลังเพิ่มเฉพาะแหล่งที่ผ่านตรวจ (2022/23 และ 2025/26) โดย cache API ของ 2023/24 และ 2024/25 ขัดกับ PL และถูกกันไว้ ดูรายละเอียดใน HISTORICAL_DATA.md
+
 - เพิ่ม Alembic migration และทดสอบกับ PostgreSQL schema `football` จริง
 - เพิ่ม lock/job queue ระดับฐานข้อมูลสำหรับหลาย worker และการกู้ job ที่ค้างเมื่อ process หยุด
 - ทดสอบร่วมกับบริการ 05/06 และ API ภายนอกจริงหลังพร้อมใช้งาน รวมถึงตรวจความตรงของ alias และ fixture mapping กับข้อมูลจริง

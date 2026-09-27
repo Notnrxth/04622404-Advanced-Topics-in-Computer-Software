@@ -36,6 +36,8 @@ For 2024 and 2025, all 20 positions, P/W/D/L, GF/GA and points were compared wit
 
 ## Index integration remains gated
 
+Local review update: current-season standings now use one stable `standings-<season>` document. Each ingest replaces its contents and matchweek. Completed-week snapshots remain in the football DB for report generation, but are not individually indexed. One-time legacy `standings-<season>-mwNN` cleanup is queued durably on the next ingest, waits for the replacement upsert, and retries failed deletes. The merged 05 validator accepts both IDs during this transition; this is a local CONTRACT change pending team review.
+
 docs/05_RETRIEVAL_DESIGN.md §10 in develop is a proposal requiring a CONTRACT agreement. This branch does not modify peers' 05, 03 or web modules.
 
 Historical metadata uses category=historical, origin=openfootball|fjelstul, topic=season_table|team_season|head_to_head. Historical fetched_at/date/matchweek are null; h2h season is null. The existing 05 currently rejects the new category/origin/IDs.
@@ -65,7 +67,17 @@ Observed:
 
 Use scope=fixtures for current-season ingest on this Free plan (football-data.org only). Do not use scope=all/details until the plan actually supports the current season; the service rejects provider plan errors rather than inventing details. Historical data sources do not contain comprehensive shot/corner/card/referee statistics. Older API data is a limited demo, not a replacement for 34 seasons of those statistics.
 
-## Credits and license
+## Historical top scorers (review update)
+
+- Run `scripts/cache_history_scorers.py` once to cache API-Football seasons 2022, 2023, 2024; reruns use cache without consuming quota. No key is stored in cache. Checksums accompany each input.
+- openfootball 2025/26: all 353 scoring matches reconcile scorer-minute counts against match scores. Own goals are retained for reconciliation but excluded from player totals; penalties count; repeated minutes/multiline blocks and players moving clubs are supported.
+- The podium is checked against reviewed PL references in `data/scorer_reference.json`. This checks only the top three, not every player's totals or club history.
+- Latest actual inputs: **2022 accepted, 2023 rejected, 2024 rejected, 2025 accepted**. API-Football lists Cunha with 24 goals ahead of Palmer in 2023 and 30 goals ahead of Salah in 2024, contradicting [PL 2023/24](https://www.premierleague.com/en/news/4021187) and [PL 2024/25](https://www.premierleague.com/en/news/4314803/salah-sweeps-202425-player-of-the-season-golden-boot-and-playmaker-awards). Those two raw responses remain cached for investigation; no manual correction, inferred rankings or scorer chunks from rejected inputs are emitted.
+- Accepted scorers appear in `## Top scorers` near the end of `hist-season-<season>`, with the individual section's source URL. No scorer section is invented for unavailable years.
+- Run `scripts/ingest_history.py --offline` to regenerate. Diagnostics are saved in ignored `data/raw/history/generated/scorer-validation.json`.
+- Only historical **scorers** may join these historical documents; API-Football match details remain demo-only. The `historical` category gate still applies. Source-data disagreements for 2023/24 and 2024/25 must be resolved before adding their scorer sections.
+
+## Credits and license (data)
 
 Match data: [openfootball/england](https://github.com/openfootball/england), [CC0 1.0](https://creativecommons.org/publicdomain/zero/1.0/).
 
@@ -79,7 +91,7 @@ Keep the required data-source credit in README and presentation materials, and s
 
 ## Validation status
 
-Final local run: **29 passed** (14.90 seconds), including optional localhost 05 HTTP integration; ruff check and format check passed (23 Python files), git diff --check passed apart from LF/CRLF notices. Credential scan found zero key matches in tracked/unignored files. Root .env, raw inputs/generated bundles and local DB are ignored.
+Latest local review run: **33 passed** for 07 (16.11 seconds), including localhost 05 integration using the merged checkout, and **84 passed** for 05 documents/index/search tests (5.08 seconds). The 05 integration uses FakeEmbedder, not a real model. Ruff checks passed for edited code. Root .env, raw inputs/generated bundles and local DB remain ignored.
 
 Regression coverage includes July 2020 dates in the COVID-delayed 2019/20 season. After regeneration, the final date is 2020-07-26; no July matches are incorrectly assigned to 2019.
 

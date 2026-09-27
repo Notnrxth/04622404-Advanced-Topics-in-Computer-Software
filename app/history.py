@@ -34,10 +34,17 @@ FIELDS = (
 def parse_season(text: str, year: int) -> list[dict]:
     matches, day, week, clock = [], None, None, None
     scorer_block = False
+    scorer_lines = []
     for number, original in enumerate(text.splitlines(), 1):
         line = original.strip()
         if scorer_block or line.startswith("("):
+            if not matches:
+                raise ValueError("Scorer block without a match")
+            scorer_lines.append(line)
             scorer_block = not line.endswith(")")
+            if not scorer_block:
+                matches[-1]["goals"] = parse_goal_block(" ".join(scorer_lines), matches[-1])
+                scorer_lines = []
             continue
         if not line or line.startswith(("#", "=", "(", ")")):
             continue
@@ -183,7 +190,13 @@ CREDIT = (
 )
 
 
-def make_documents(seasons: dict, tables: dict, clubs: dict, source_urls: dict) -> list[dict]:
+def make_documents(
+    seasons: dict,
+    tables: dict,
+    clubs: dict,
+    source_urls: dict,
+    scorers: dict | None = None,
+) -> list[dict]:
     documents, pairs = [], defaultdict(list)
 
     def doc(doc_id, title, text, topic, season, slugs, origin, url):
@@ -241,8 +254,17 @@ def make_documents(seasons: dict, tables: dict, clubs: dict, source_urls: dict) 
         text += (
             f"## Season facts\nMatches: {len(matches)}. "
             f"Total goals: {sum(m['home_goals'] + m['away_goals'] for m in matches)}. "
-            f"Biggest winning margin: {result(biggest)}."
+            f"Biggest winning margin: {result(biggest)}.\n"
         )
+        if scorers and season in scorers:
+            source = scorers[season]
+            text += "## Top scorers\n"
+            for rank, player in enumerate(source["items"], 1):
+                names = ", ".join(clubs[s]["name"] for s in player["clubs"])
+                full = player.get("full_name")
+                label = f"{player['player']} / {full}" if full else player["player"]
+                text += f"{rank}. {label} ({names}): {player['goals']} goals.\n"
+            text += f"Source: {source['name']}. {source['url']}\n"
         documents.append(
             doc(
                 f"hist-season-{season}",
@@ -334,3 +356,135 @@ def make_documents(seasons: dict, tables: dict, clubs: dict, source_urls: dict) 
             )
         )
     return documents
+
+
+GOAL_TOKEN = re.compile(r"^(?:(.*?)\s+)?(\d+(?:\+\d+)?)'\s*(\(og\)|\(p\))?$")
+
+
+def parse_goal_block(text: str, match: dict) -> list[dict]:
+    """Parse credited sides, retaining own goals for validation but not player totals."""
+    content = text.strip()[1:-1]
+    parts = content.split(";")
+    if len(parts) == 1:
+        if match["home_goals"] and match["away_goals"]:
+            raise ValueError("Scorer block needs a home/away separator")
+        sides = [("home" if match["home_goals"] else "away", parts[0])]
+    elif len(parts) == 2:
+        sides = list(zip(("home", "away"), parts, strict=True))
+    else:
+        raise ValueError("Too many scorer-side separators")
+    goals = []
+    for side, part in sides:
+        player = None
+        for token in part.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            parsed = GOAL_TOKEN.fullmatch(token)
+            if not parsed:
+                raise ValueError(f"Unrecognized goal token: {token}")
+            if parsed[1]:
+                player = " ".join(parsed[1].split())
+            if not player:
+                raise ValueError("Goal minute without a player name")
+            goals.append(
+                {
+                    "player": player,
+                    "minute": parsed[2],
+                    "side": side,
+                    "own_goal": parsed[3] == "(og)",
+                    "penalty": parsed[3] == "(p)",
+                }
+            )
+    for side in ("home", "away"):
+        if sum(g["side"] == side for g in goals) != match[f"{side}_goals"]:
+            raise ValueError("Scorer block does not reconcile to the final score")
+    return goals
+
+
+def season_scorers(matches: list[dict]) -> list[dict]:
+    import unicodedata
+
+    players = {}
+    for match in matches:
+        if match["home_goals"] + match["away_goals"] and "goals" not in match:
+            raise ValueError("Incomplete scorer coverage; refusing to estimate totals")
+        for goal in match.get("goals", []):
+            if goal["own_goal"]:
+                continue
+            key = unicodedata.normalize("NFKC", goal["player"]).casefold()
+            row = players.setdefault(
+                key, {"player": goal["player"].title(), "goals": 0, "clubs": set()}
+            )
+            row["goals"] += 1
+            row["clubs"].add(match[goal["side"]])
+    return [
+        {**row, "clubs": sorted(row["clubs"])}
+        for row in sorted(players.values(), key=lambda r: (-r["goals"], r["player"]))
+    ]
+
+
+def load_scorer_sources(
+    raw: Path, clubs: dict, seasons: dict, source_urls: dict
+) -> tuple[dict, dict]:
+    """Never publish a scorer source that disagrees with the reviewed official podium."""
+    import hashlib
+    import json
+
+    reference = json.loads(
+        (Path(__file__).parents[1] / "data/scorer_reference.json").read_text(encoding="utf-8")
+    )
+    sources, validation = {}, {}
+    for year in ("2022", "2023", "2024", "2025"):
+        if year == "2025":
+            items = season_scorers(seasons[year])
+            source = {"name": "openfootball", "url": source_urls[year], "items": items}
+        else:
+            path = raw / f"scorers/{year}.json"
+            if not path.exists():
+                validation[year] = {"status": "missing"}
+                continue
+            meta = json.loads(path.with_suffix(".meta.json").read_text(encoding="utf-8"))
+            if hashlib.sha256(path.read_bytes()).hexdigest() != meta["sha256"]:
+                raise ValueError("Historical scorer cache checksum mismatch")
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if payload.get("errors") or not payload.get("response"):
+                raise ValueError("Invalid historical scorer cache")
+            items = []
+            for player in payload["response"]:
+                stat = player["statistics"][0]
+                if stat["league"]["id"] != 39 or str(stat["league"]["season"]) != year:
+                    raise ValueError("Wrong scorer league/season")
+                full_name = " ".join(
+                    filter(
+                        None, (player["player"].get("firstname"), player["player"].get("lastname"))
+                    )
+                )
+                items.append(
+                    {
+                        "player": player["player"]["name"],
+                        "full_name": full_name,
+                        "goals": stat["goals"]["total"],
+                        "clubs": [resolve(stat["team"]["name"], clubs)],
+                    }
+                )
+            source = {
+                "name": "API-Football",
+                "url": "https://www.api-football.com/documentation-v3#tag/Players/operation/get-players-topscorers",
+                "items": items,
+            }
+        observed = sorted(items, key=lambda item: -item["goals"])[:3]
+        expected = reference[year]["top3"]
+        matches = len(observed) == 3 and all(
+            name.casefold() in got["player"].casefold() and goals == got["goals"]
+            for (name, goals), got in zip(expected, observed, strict=True)
+        )
+        validation[year] = {
+            "status": "accepted" if matches else "rejected",
+            "official_url": reference[year]["url"],
+            "check_scope": "top three only; not a full-player official validation",
+            "observed_top3": [{"player": r["player"], "goals": r["goals"]} for r in observed],
+        }
+        if matches:
+            sources[year] = source
+    return sources, validation

@@ -47,6 +47,8 @@ async def test_ingest_cached_real_primary_data(tmp_path):
     indexed = {}
 
     async def transport(request):
+        if request.method == "DELETE":
+            return httpx.Response(200)
         endpoint = request.url.path.rsplit("/", 1)[-1]
         if request.url.path == "/index/upsert":
             indexed.update({d["doc_id"]: d for d in json.loads(request.content)["documents"]})

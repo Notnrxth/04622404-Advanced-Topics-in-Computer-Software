@@ -84,6 +84,7 @@
     "aliases": [
       "Brighton & Hove Albion",
       "Brighton and Hove Albion",
+      "Brighton",
       "Brighton & Hove Albion FC"
     ]
   },
@@ -180,6 +181,7 @@
     "team_id": 349,
     "aliases": [
       "Ipswich Town",
+      "Ipswich",
       "Ipswich Town FC"
     ]
   },
@@ -247,7 +249,8 @@
     "aliases": [
       "Newcastle United",
       "Newcastle United FC",
-      "Newcastle Utd"
+      "Newcastle Utd",
+      "Newcastle"
     ]
   },
   "norwich-city": {
@@ -407,6 +410,7 @@
     "team_id": null,
     "aliases": [
       "Wolverhampton Wanderers",
+      "Wolves",
       "Wolverhampton Wanderers FC"
     ]
   }
