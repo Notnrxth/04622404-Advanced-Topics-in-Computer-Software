@@ -251,6 +251,13 @@ class FootballService:
                 await db.commit()
                 raise ServiceError("INDEX_UPDATE_FAILED", 502, str(exc)) from exc
             for task in tasks:
+                if task.payload.get("category") == "standings":
+                    await db.merge(
+                        ServiceState(
+                            key=f"standings_indexed_{task.payload['season']}",
+                            value=now_iso(),
+                        )
+                    )
                 await db.delete(task)
             await db.merge(ServiceState(key="last_index_sync_at", value=now_iso()))
             await db.commit()
@@ -300,6 +307,14 @@ class FootballService:
                         if replacement is not None:
                             # Do not remove the last old table until the new stable ID is indexed.
                             continue
+                        replacement_id = document["replacement_doc_id"]
+                        if replacement_id.startswith("standings-"):
+                            indexed = await db.get(
+                                ServiceState, f"standings_indexed_{replacement_id[10:]}"
+                            )
+                            if indexed is None:
+                                # No durable evidence that the new document ever reached 05.
+                                continue
                     if action == "transition":
                         updated_at = task.updated_at
                         if updated_at.tzinfo is None:
@@ -582,16 +597,9 @@ class FootballService:
                 existing_snapshot = await db.get(Standing, key)
                 if (
                     existing_snapshot is None
-                    or existing_snapshot.payload.get("provisional")
-                    or existing_snapshot.payload.get("snapshot_type") == "live"
+                    or existing_snapshot.payload.get("snapshot_type") != "completed"
                 ):
                     await db.merge(Standing(season=season, matchweek=key[1], payload=snapshot))
-                elif existing_snapshot.payload.get("snapshot_type") is None:
-                    # Preserve official facts stored before snapshot labels were introduced.
-                    existing_snapshot.payload = {
-                        **existing_snapshot.payload,
-                        "snapshot_type": "completed",
-                    }
             await db.merge(
                 Scorers(season=season, payload={"items": scorers, "fetched_at": fetched_at})
             )
@@ -599,7 +607,10 @@ class FootballService:
             documents = self._documents(matches, standing, season, fetched_at, scorers)
             await self._queue_documents(db, documents, request_id)
             cleanup_key = f"standings_legacy_cleanup_queued_{season}"
-            if await db.get(ServiceState, cleanup_key) is None:
+            if (
+                any(doc["doc_id"] == f"standings-{season}" for doc in documents)
+                and await db.get(ServiceState, cleanup_key) is None
+            ):
                 # Durable one-time migration; failed deletes remain retryable in the outbox.
                 for week in range(1, 39):
                     await db.merge(
@@ -648,9 +659,12 @@ class FootballService:
             for match in matches:
                 fixture = match_api_fixture(match, fixtures)
                 if fixture is None:
-                    raise ServiceError(
-                        "UPSTREAM_UNAVAILABLE", 502, f"จับคู่ API-Football ไม่ได้: {match['match_id']}"
+                    logger.warning(
+                        "Skipping unmatched API-Football fixture: match_id=%s date=%s",
+                        match["match_id"],
+                        date,
                     )
+                    continue
                 api_id = fixture["fixture"]["id"]
                 events = await self._api_football_get(
                     "fixtures/events", {"fixture": api_id}, request_id

@@ -44,6 +44,8 @@ def test_thai_nicknames_cover_all_2026_27_premier_league_clubs():
         raw_name = f"{name} FC" if name != "AFC Bournemouth" else name
         payload = team_payload({"id": team_id, "name": raw_name})
         assert nickname in payload["aliases"], name
+        if name == "Liverpool":
+            assert "เป็ดแดง" in payload["aliases"]
 
 
 def test_match_payload_uses_stable_id_bangkok_time_and_contract_status():

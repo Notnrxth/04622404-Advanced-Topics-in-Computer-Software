@@ -103,6 +103,10 @@ def test_document_metadata_stable_ids_and_credits():
     assert h2h["doc_id"] == "hist-h2h-arsenal-chelsea"
     assert h2h["season"] is None
     assert "2 meetings: Arsenal FC won 1, draws 1, Chelsea FC won 0" in h2h["text"]
+    biggest_wins = h2h["text"].split("## Biggest wins\n", 1)[1].split("## ", 1)[0]
+    assert "Arsenal FC 2-1 Chelsea FC" in biggest_wins
+    assert "No Premier League wins for Chelsea FC against Arsenal FC." in biggest_wins
+    assert "Chelsea 0-0 Arsenal" not in biggest_wins
 
 
 @pytest.mark.asyncio

@@ -332,17 +332,21 @@ def make_documents(
         text += "\n## Recent meetings\n" + "\n".join(
             result(m) for m in sorted(matches, key=lambda m: m["date"], reverse=True)[:6]
         )
-        text += "\n## Biggest wins\n" + "\n".join(
-            result(
-                max(
-                    matches,
-                    key=lambda m: (
-                        (m["home_goals"] - m["away_goals"]) * (1 if m["home"] == s else -1)
-                    ),
+        biggest_wins = []
+        for s in (a, b):
+
+            def margin(match, side=s):
+                return (match["home_goals"] - match["away_goals"]) * (
+                    1 if match["home"] == side else -1
                 )
+
+            won = [match for match in matches if margin(match) > 0]
+            biggest_wins.append(
+                result(max(won, key=margin))
+                if won
+                else f"No Premier League wins for {names[s]} against {names[b if s == a else a]}."
             )
-            for s in (a, b)
-        )
+        text += "\n## Biggest wins\n" + "\n".join(biggest_wins)
         documents.append(
             doc(
                 f"hist-h2h-{a}-{b}",

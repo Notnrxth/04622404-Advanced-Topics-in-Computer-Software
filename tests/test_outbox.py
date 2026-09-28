@@ -253,9 +253,6 @@ async def test_legacy_cleanup_waits_for_replacement_and_retries_failed_delete(tm
 
     async with local_service(tmp_path, transport) as service:
         async with service.sessions() as db:
-            await service._queue_documents(
-                db, [{**document(1), "category": "standings", "doc_id": new}], str(uuid4())
-            )
             db.add(
                 IndexTask(
                     doc_id=old,
@@ -264,6 +261,13 @@ async def test_legacy_cleanup_waits_for_replacement_and_retries_failed_delete(tm
                     request_id=str(uuid4()),
                     updated_at=datetime.now(BANGKOK),
                 )
+            )
+            await db.commit()
+        await service.reconcile_index()
+        assert old in indexed and not deletes
+        async with service.sessions() as db:
+            await service._queue_documents(
+                db, [{**document(1), "category": "standings", "doc_id": new}], str(uuid4())
             )
             await db.commit()
         with pytest.raises(ServiceError):
