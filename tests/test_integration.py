@@ -51,8 +51,8 @@ def report_payload(season: str, matchweek: int) -> dict:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("legacy_snapshot", [False, True])
-async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, legacy_snapshot):
+@pytest.mark.parametrize("prior_snapshot", ["none", "legacy", "live"])
+async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, prior_snapshot):
     season = current_season()
     indexed = {}
     fail_once = {"value": True}
@@ -140,13 +140,19 @@ async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, leg
     app = create_app(settings, http=upstream_client)
     async with app.router.lifespan_context(app):
         service = app.state.service
-        if legacy_snapshot:
+        if prior_snapshot != "none":
             async with service.sessions() as db:
+                previous = {"season": season, "matchweek": 5, "rows": []}
+                if prior_snapshot == "live":
+                    previous["snapshot_type"] = "live"
+                    previous["rows"] = [
+                        {"team_id": 57, "name": "Arsenal FC", "position": 1, "points": 99}
+                    ]
                 db.add(
                     Standing(
                         season=season,
                         matchweek=5,
-                        payload={"season": season, "matchweek": 5, "rows": []},
+                        payload=previous,
                     )
                 )
                 await db.commit()
@@ -157,6 +163,10 @@ async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, leg
         assert status["index_sync"]["pending"] > 0
         assert (await service.standings(season))["matchweek"] == 5
         assert status["current_matchweek"] == 5
+        if prior_snapshot == "live":
+            completed = await service.standings(season)
+            assert completed["snapshot_type"] == "completed"
+            assert completed["rows"][0]["points"] == 3
 
         await service.reconcile_index()
         assert (await service.status())["index_sync"]["pending"] == 0
@@ -172,6 +182,9 @@ async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, leg
         report = await service.report(season, 5, published=False)
         assert report["status"] == "draft"
         assert "Arsenal FC 2-1 Chelsea FC" in report["search_text_en"]
+        if prior_snapshot == "live":
+            assert "Arsenal FC: 3 points" in report["search_text_en"]
+            assert "99 points" not in report["search_text_en"]
         edited = await service.edit_report(season, 5, None, "แก้บทความ ไม่ใช่ผลการแข่งขัน", "beat")
         assert edited["search_text_en"] == report["search_text_en"]
     await upstream_client.aclose()

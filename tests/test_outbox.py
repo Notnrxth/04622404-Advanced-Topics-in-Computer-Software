@@ -10,7 +10,7 @@ import httpx
 import pytest
 
 from app.config import Settings
-from app.db import Base, IndexTask, Match, Standing, WeeklyReport, make_database
+from app.db import Base, IndexTask, Job, Match, Standing, WeeklyReport, make_database
 from app.football import current_season, match_payload
 from app.main import create_app
 from app.service import BANGKOK, INDEX_MAX_BYTES, FootballService, ServiceError
@@ -278,3 +278,100 @@ async def test_legacy_cleanup_waits_for_replacement_and_retries_failed_delete(tm
         await service.reconcile_index()
         assert set(indexed) == {new}
         assert deletes == [old, old]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_jobs_finish_and_startup_recovers_orphans(tmp_path):
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'football.db'}"
+    ingest_started = asyncio.Event()
+
+    async def blocked_ingest(*_args):
+        ingest_started.set()
+        await asyncio.Event().wait()
+
+    async def cancelled_report(*_args):
+        raise asyncio.CancelledError
+
+    async with local_service(tmp_path, lambda _request: httpx.Response(200)) as service:
+        ingest_id = await service.start_job("ingest", "fixtures", "beat", str(uuid4()))
+        service._ingest_primary = blocked_ingest
+        ingest_task = asyncio.create_task(service.run_ingest(ingest_id, "fixtures", str(uuid4())))
+        await asyncio.wait_for(ingest_started.wait(), timeout=2)
+        ingest_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await ingest_task
+        assert (await service.get_job(ingest_id))["status"] == "failed"
+
+        report_id = await service.start_job("report", None, "beat", str(uuid4()))
+        service._create_report = cancelled_report
+        with pytest.raises(asyncio.CancelledError):
+            await service.run_report(report_id, current_season(), 5, str(uuid4()))
+        assert (await service.get_job(report_id))["status"] == "failed"
+
+        queued_id = await service.start_job("ingest", "fixtures", "beat", str(uuid4()))
+        running_id = await service.start_job("report", None, "beat", str(uuid4()))
+        async with service.sessions() as db:
+            running = await db.get(Job, running_id)
+            running.status = "running"
+            await db.commit()
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda _req: httpx.Response(200))
+    ) as upstream:
+        app = create_app(Settings(database_url=database_url), http=upstream)
+        async with app.router.lifespan_context(app):
+            restarted = app.state.service
+            for old_id in (queued_id, running_id):
+                recovered = await restarted.get_job(old_id)
+                assert recovered["status"] == "failed"
+                assert recovered["detail"] == "Interrupted by service restart"
+            assert await restarted.start_job("ingest", "fixtures", "beat", str(uuid4()))
+            assert await restarted.start_job("report", None, "beat", str(uuid4()))
+
+
+@pytest.mark.asyncio
+async def test_report_transition_ignores_unrelated_failed_outbox_task(tmp_path):
+    indexed = {}
+
+    async def transport(request):
+        if request.method == "DELETE":
+            indexed.pop(request.url.path.removeprefix("/index/"), None)
+        else:
+            indexed.update({doc["doc_id"]: doc for doc in json.loads(request.content)["documents"]})
+        return httpx.Response(200)
+
+    async with local_service(tmp_path, transport) as service:
+        season = current_season()
+        stale = report_payload(season, 4)
+        stale.pop("search_text_en")
+        stale["status"] = "published"
+        async with service.sessions() as db:
+            db.add(WeeklyReport(season=season, matchweek=4, status="published", payload=stale))
+            db.add(
+                WeeklyReport(
+                    season=season, matchweek=5, status="draft", payload=report_payload(season, 5)
+                )
+            )
+            db.add(
+                IndexTask(
+                    doc_id=f"weekly-{season}-mw04",
+                    action="reconcile_report",
+                    payload={"season": season, "matchweek": 4},
+                    request_id=str(uuid4()),
+                    updated_at=datetime.now(BANGKOK),
+                )
+            )
+            await db.commit()
+
+        published = await service.publish(season, 5, "beat", str(uuid4()))
+        assert published["status"] == "published"
+        assert f"weekly-{season}-mw05" in indexed
+        unpublished = await service.unpublish(season, 5, "beat", str(uuid4()))
+        assert unpublished["status"] == "unpublished"
+        assert f"weekly-{season}-mw05" not in indexed
+
+        async with service.sessions() as db:
+            assert await db.get(IndexTask, f"weekly-{season}-mw04") is not None
+            assert await db.get(IndexTask, f"weekly-{season}-mw05") is None
+        with pytest.raises(ServiceError, match="Cannot backfill"):
+            await service.reconcile_index()

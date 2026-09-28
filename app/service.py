@@ -255,14 +255,15 @@ class FootballService:
             await db.merge(ServiceState(key="last_index_sync_at", value=now_iso()))
             await db.commit()
 
-    async def reconcile_index(self) -> None:
+    async def reconcile_index(self, doc_id: str | None = None) -> None:
         """Replay persisted writes; report tasks follow the durable DB publication state."""
         async with self._index_lock:
             async with self.sessions() as db:
+                query = select(IndexTask)
+                if doc_id is not None:
+                    query = query.where(IndexTask.doc_id == doc_id)
                 tasks = list(
-                    await db.scalars(
-                        select(IndexTask).order_by(IndexTask.updated_at, IndexTask.doc_id)
-                    )
+                    await db.scalars(query.order_by(IndexTask.updated_at, IndexTask.doc_id))
                 )
             batches, batch, documents = [], [], []
             ids = []
@@ -427,6 +428,17 @@ class FootballService:
                 await db.commit()
                 return job_id
 
+    async def recover_interrupted_jobs(self) -> None:
+        """A previous process cannot resume its in-memory background jobs."""
+        async with self.sessions() as db:
+            jobs = list(await db.scalars(select(Job).where(Job.status.in_(["queued", "running"]))))
+            for job in jobs:
+                job.status = "failed"
+                job.detail = "Interrupted by service restart"
+                job.finished_at = datetime.now(BANGKOK)
+            if jobs:
+                await db.commit()
+
     async def _finish_job(self, job_id: str, detail: str | None) -> None:
         async with self.sessions() as db:
             job = await db.get(Job, job_id)
@@ -503,6 +515,9 @@ class FootballService:
             if scope in ("details", "all"):
                 await self._ingest_details(request_id)
             await self._finish_job(job_id, None)
+        except asyncio.CancelledError:
+            await self._finish_job(job_id, "CancelledError: task cancelled")
+            raise
         except Exception as exc:
             await self._finish_job(job_id, f"{type(exc).__name__}: {exc}")
 
@@ -565,9 +580,13 @@ class FootballService:
                 snapshot["snapshot_type"] = "completed"
                 key = (season, snapshot["matchweek"])
                 existing_snapshot = await db.get(Standing, key)
-                if existing_snapshot is None or existing_snapshot.payload.get("provisional"):
+                if (
+                    existing_snapshot is None
+                    or existing_snapshot.payload.get("provisional")
+                    or existing_snapshot.payload.get("snapshot_type") == "live"
+                ):
                     await db.merge(Standing(season=season, matchweek=key[1], payload=snapshot))
-                elif existing_snapshot.payload.get("snapshot_type") != "completed":
+                elif existing_snapshot.payload.get("snapshot_type") is None:
                     # Preserve official facts stored before snapshot labels were introduced.
                     existing_snapshot.payload = {
                         **existing_snapshot.payload,
@@ -852,7 +871,7 @@ class FootballService:
         doc_id = f"weekly-{season}-mw{matchweek:02d}"
         async with self._report_lock:
             # Repair a previous interrupted transition before starting another one.
-            await self.reconcile_index()
+            await self.reconcile_index(doc_id)
             async with self.sessions() as db:
                 row = await db.get(WeeklyReport, (season, matchweek), with_for_update=True)
                 if row is None:
@@ -928,6 +947,9 @@ class FootballService:
         try:
             await self._create_report(season, matchweek, request_id)
             await self._finish_job(job_id, None)
+        except asyncio.CancelledError:
+            await self._finish_job(job_id, "CancelledError: task cancelled")
+            raise
         except Exception as exc:
             await self._finish_job(job_id, f"{type(exc).__name__}: {exc}")
 

@@ -40,6 +40,8 @@ def event_payload(raw: dict, api_fixture: dict, match: dict) -> dict | None:
     kind = (raw.get("type") or "").casefold()
     detail = (raw.get("detail") or "").casefold()
     if kind == "goal":
+        if "missed" in detail:
+            return None
         event_type = "own_goal" if "own" in detail else "penalty" if "penalty" in detail else "goal"
     elif kind == "card":
         event_type = "red" if "red" in detail else "yellow" if "yellow" in detail else None

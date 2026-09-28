@@ -1,4 +1,19 @@
+from app.api_football import event_payload
 from app.football import ALIASES, match_payload, scorer_payload, standing_payload, team_payload
+
+
+def test_missed_penalty_is_not_a_goal_event():
+    fixture = {"teams": {"home": {"id": 100}, "away": {"id": 200}}}
+    match = {"home": {"team_id": 57}, "away": {"team_id": 61}}
+    raw = {
+        "type": "Goal",
+        "detail": "Missed Penalty",
+        "team": {"id": 100},
+        "time": {"elapsed": 80},
+        "player": {"name": "Striker"},
+    }
+    assert event_payload(raw, fixture, match) is None
+    assert event_payload({**raw, "detail": "Penalty"}, fixture, match)["type"] == "penalty"
 
 
 def test_thai_nicknames_cover_all_2026_27_premier_league_clubs():

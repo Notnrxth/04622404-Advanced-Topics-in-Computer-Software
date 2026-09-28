@@ -91,6 +91,7 @@ def create_app(
                 await conn.execute(text("CREATE SCHEMA IF NOT EXISTS football"))
             await conn.run_sync(Base.metadata.create_all)
 
+        await service.recover_interrupted_jobs()
         repair_task = asyncio.create_task(service.run_index_worker())
         try:
             yield
