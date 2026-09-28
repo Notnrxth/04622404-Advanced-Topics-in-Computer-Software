@@ -51,7 +51,7 @@ def report_payload(season: str, matchweek: int) -> dict:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("prior_snapshot", ["none", "legacy", "live"])
+@pytest.mark.parametrize("prior_snapshot", ["none", "legacy", "live", "deducted_live"])
 async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, prior_snapshot):
     season = current_season()
     indexed = {}
@@ -147,7 +147,18 @@ async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, pri
                     "matchweek": 5,
                     "rows": [{"team_id": 57, "name": "Arsenal FC", "position": 1, "points": 99}],
                 }
-                if prior_snapshot == "live":
+                if prior_snapshot == "deducted_live":
+                    previous["rows"] = [
+                        {
+                            "team_id": 57,
+                            "name": "Arsenal FC",
+                            "position": 2,
+                            "won": 1,
+                            "draw": 0,
+                            "points": -4,
+                        }
+                    ]
+                if prior_snapshot in ("live", "deducted_live"):
                     previous["snapshot_type"] = "live"
                 db.add(
                     Standing(
@@ -157,17 +168,17 @@ async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, pri
                     )
                 )
                 await db.commit()
-        with pytest.raises(ServiceError) as ingest_error:
-            await service._ingest_primary(str(uuid4()))
-        assert ingest_error.value.code == "INDEX_UPDATE_FAILED"
+        await service._ingest_primary(str(uuid4()))
         status = await service.status()
         assert status["index_sync"]["pending"] > 0
-        assert (await service.standings(season))["matchweek"] == 5
-        assert status["current_matchweek"] == 5
+        assert (await service.standings(season))["matchweek"] == 6
+        assert status["current_matchweek"] == 6
         if prior_snapshot != "none":
-            completed = await service.standings(season)
+            async with service.sessions() as db:
+                completed = (await db.get(Standing, (season, 5))).payload
             assert completed["snapshot_type"] == "completed"
-            assert completed["rows"][0]["points"] == 3
+            arsenal = next(row for row in completed["rows"] if row["team_id"] == 57)
+            assert arsenal["points"] == (-4 if prior_snapshot == "deducted_live" else 3)
 
         await service.reconcile_index()
         assert (await service.status())["index_sync"]["pending"] == 0
@@ -176,6 +187,7 @@ async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, pri
         assert f"match-{season}-mw05-57-61" in indexed
         live = indexed[f"standings-{season}"]
         assert "Live standings during matchweek 6" in live["title"]
+        assert live["matchweek"] == status["current_matchweek"]
         assert "Example Striker (Arsenal FC): 7 goals" in live["text"]
         assert live["category"] == "standings"
 
@@ -184,7 +196,8 @@ async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, pri
         assert report["status"] == "draft"
         assert "Arsenal FC 2-1 Chelsea FC" in report["search_text_en"]
         if prior_snapshot != "none":
-            assert "Arsenal FC: 3 points" in report["search_text_en"]
+            expected_points = -4 if prior_snapshot == "deducted_live" else 3
+            assert f"Arsenal FC: {expected_points} points" in report["search_text_en"]
             assert "99 points" not in report["search_text_en"]
         edited = await service.edit_report(season, 5, None, "แก้บทความ ไม่ใช่ผลการแข่งขัน", "beat")
         assert edited["search_text_en"] == report["search_text_en"]
@@ -326,6 +339,81 @@ async def test_detail_ingest_maps_fixture_and_persists_quota(tmp_path):
         await service._ingest_details(str(uuid4()))
         assert len(calls) == count
     await upstream_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_detail_ingest_continues_after_first_index_failure(tmp_path):
+    season = current_season()
+    older_raw = example_match(season)
+    newer_raw = {
+        **example_match(season),
+        "id": 54321,
+        "matchday": 6,
+        "utcDate": f"{season}-09-21T11:30:00Z",
+    }
+    index_calls = 0
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        nonlocal index_calls
+        if request.url.path == "/fixtures":
+            date = request.url.params["date"]
+            fixture_id = 999 if date == f"{season}-09-20" else 1000
+            return httpx.Response(
+                200,
+                json={
+                    "response": [
+                        {
+                            "fixture": {"id": fixture_id, "date": f"{date}T11:30:00+00:00"},
+                            "teams": {
+                                "home": {"id": 111, "name": "Arsenal"},
+                                "away": {"id": 222, "name": "Chelsea"},
+                            },
+                            "goals": {"home": 2, "away": 1},
+                        }
+                    ]
+                },
+            )
+        if request.url.path in (
+            "/fixtures/events",
+            "/fixtures/lineups",
+            "/fixtures/statistics",
+        ):
+            return httpx.Response(200, json={"response": []})
+        if request.url.path == "/index/upsert":
+            index_calls += 1
+            return httpx.Response(503 if index_calls == 1 else 200, json={"upserted": 2})
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    settings = Settings(
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'football.db'}",
+        api_football_key="test-key",
+    )
+    async with httpx.AsyncClient(transport=httpx.MockTransport(upstream)) as upstream_client:
+        app = create_app(settings, http=upstream_client)
+        async with app.router.lifespan_context(app):
+            service = app.state.service
+            older = match_payload(older_raw, f"{season}-09-21T09:00:00+07:00")
+            newer = match_payload(newer_raw, f"{season}-09-21T09:00:00+07:00")
+            async with service.sessions() as db:
+                for match in (newer, older):
+                    db.add(
+                        Match(
+                            match_id=match["match_id"],
+                            external_id=match["external_ids"]["football_data"],
+                            season=season,
+                            matchweek=match["matchweek"],
+                            home_team_id=57,
+                            away_team_id=61,
+                            status="FINISHED",
+                            payload=match,
+                        )
+                    )
+                await db.commit()
+            await service._ingest_details(str(uuid4()))
+            assert (await service.match(older["match_id"]))["detail_source"] == "api-football"
+            assert (await service.match(newer["match_id"]))["detail_source"] == "api-football"
+            assert index_calls >= 2
+            assert (await service.status())["index_sync"]["pending"] == 0
 
 
 @pytest.mark.asyncio

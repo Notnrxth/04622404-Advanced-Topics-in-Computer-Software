@@ -10,7 +10,7 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -132,10 +132,9 @@ class FootballService:
                 .order_by(Standing.matchweek.desc())
             )
         )
-        return next(
-            (row for row in rows if row.payload.get("snapshot_type") == "completed"),
-            rows[0] if rows else None,
-        )
+        # The newest official live row is the current table; completed prior weeks
+        # remain available by exact matchweek for report generation.
+        return rows[0] if rows else None
 
     async def status(self) -> dict:
         season = current_season()
@@ -238,27 +237,42 @@ class FootballService:
                     select(IndexTask)
                     .where(IndexTask.doc_id.in_(doc_ids), IndexTask.action == "upsert")
                     .order_by(IndexTask.updated_at, IndexTask.doc_id)
-                    .with_for_update()
                 )
             )
-            if not tasks:
-                return
-            try:
-                await self._send_upserts([task.payload for task in tasks], tasks[0].request_id)
-            except (httpx.HTTPError, ValueError, ServiceError) as exc:
+        if not tasks:
+            return
+        try:
+            await self._send_upserts([task.payload for task in tasks], tasks[0].request_id)
+        except (httpx.HTTPError, ValueError, ServiceError) as exc:
+            async with self.sessions() as db:
                 for task in tasks:
-                    task.last_error = str(exc)
+                    await db.execute(
+                        update(IndexTask)
+                        .where(
+                            IndexTask.doc_id == task.doc_id,
+                            IndexTask.action == "upsert",
+                            IndexTask.updated_at == task.updated_at,
+                        )
+                        .values(last_error=str(exc))
+                    )
                 await db.commit()
-                raise ServiceError("INDEX_UPDATE_FAILED", 502, str(exc)) from exc
+            raise ServiceError("INDEX_UPDATE_FAILED", 502, str(exc)) from exc
+        async with self.sessions() as db:
             for task in tasks:
-                if task.payload.get("category") == "standings":
+                removed = await db.execute(
+                    delete(IndexTask).where(
+                        IndexTask.doc_id == task.doc_id,
+                        IndexTask.action == "upsert",
+                        IndexTask.updated_at == task.updated_at,
+                    )
+                )
+                if removed.rowcount and task.payload.get("category") == "standings":
                     await db.merge(
                         ServiceState(
                             key=f"standings_indexed_{task.payload['season']}",
                             value=now_iso(),
                         )
                     )
-                await db.delete(task)
             await db.merge(ServiceState(key="last_index_sync_at", value=now_iso()))
             await db.commit()
 
@@ -273,10 +287,10 @@ class FootballService:
                     await db.scalars(query.order_by(IndexTask.updated_at, IndexTask.doc_id))
                 )
             batches, batch, documents = [], [], []
-            ids = []
+            non_upserts = []
             for task in tasks:
                 if task.action != "upsert":
-                    ids.append(task.doc_id)
+                    non_upserts.append(task)
                     continue
                 candidate = [*documents, task.payload]
                 if batch and (
@@ -296,10 +310,14 @@ class FootballService:
                     await self._replay_upsert_batch(batch_ids)
                 except ServiceError as exc:
                     first_error = first_error or exc
-            for doc_id in ids:
+            for seen in non_upserts:
                 async with self.sessions() as db:
-                    task = await db.get(IndexTask, doc_id, with_for_update=True)
-                    if task is None:
+                    task = await db.get(IndexTask, seen.doc_id)
+                    if (
+                        task is None
+                        or task.action != seen.action
+                        or task.updated_at != seen.updated_at
+                    ):
                         continue
                     action, document = task.action, task.payload
                     if action == "delete" and document and document.get("replacement_doc_id"):
@@ -336,27 +354,59 @@ class FootballService:
                                 await self._backfill_report_search(db, report)
                                 document = report_doc(report.payload)
                             except ServiceError as exc:
-                                task.last_error = str(exc)
+                                await db.execute(
+                                    update(IndexTask)
+                                    .where(
+                                        IndexTask.doc_id == seen.doc_id,
+                                        IndexTask.action == seen.action,
+                                        IndexTask.updated_at == seen.updated_at,
+                                    )
+                                    .values(last_error=str(exc))
+                                )
                                 await db.commit()
                                 first_error = first_error or exc
                                 continue
                         else:
                             document = None
-                    try:
-                        await self._send_index(action, document, doc_id, task.request_id)
-                    except (httpx.HTTPError, ValueError) as exc:
-                        task.last_error = str(exc)
-                        await db.commit()
-                        first_error = first_error or ServiceError(
-                            "INDEX_UPDATE_FAILED", 502, str(exc)
+                    request_id = task.request_id
+                    await db.commit()
+                try:
+                    await self._send_index(action, document, seen.doc_id, request_id)
+                except (httpx.HTTPError, ValueError, ServiceError) as exc:
+                    async with self.sessions() as db:
+                        await db.execute(
+                            update(IndexTask)
+                            .where(
+                                IndexTask.doc_id == seen.doc_id,
+                                IndexTask.action == seen.action,
+                                IndexTask.updated_at == seen.updated_at,
+                            )
+                            .values(last_error=str(exc))
                         )
-                        continue
-                    await db.delete(task)
-                    await db.merge(ServiceState(key="last_index_sync_at", value=now_iso()))
+                        await db.commit()
+                    first_error = first_error or ServiceError("INDEX_UPDATE_FAILED", 502, str(exc))
+                    continue
+                async with self.sessions() as db:
+                    removed = await db.execute(
+                        delete(IndexTask).where(
+                            IndexTask.doc_id == seen.doc_id,
+                            IndexTask.action == seen.action,
+                            IndexTask.updated_at == seen.updated_at,
+                        )
+                    )
+                    if removed.rowcount:
+                        await db.merge(ServiceState(key="last_index_sync_at", value=now_iso()))
                     await db.commit()
 
             if first_error:
                 raise first_error
+
+    async def _reconcile_after_ingest(self) -> None:
+        """Persisted football data succeeds even when retrieval must retry later."""
+        try:
+            await self.reconcile_index()
+        except Exception:
+            logger.exception("Index sync deferred; durable outbox will retry")
 
     async def teams(self) -> dict:
         async with self.sessions() as db:
@@ -560,11 +610,7 @@ class FootballService:
         standing["snapshot_type"] = (
             "completed" if standing["matchweek"] in completed_weeks else "live"
         )
-        derived = [
-            derive_standings(matches, teams, season, week, fetched_at)
-            for week in completed_weeks
-            if week != standing["matchweek"]
-        ]
+        derived_weeks = [week for week in completed_weeks if week != standing["matchweek"]]
         async with self.sessions() as db:
             for item in teams:
                 await db.merge(Team(team_id=item["team_id"], payload=item))
@@ -591,15 +637,27 @@ class FootballService:
             await db.merge(
                 Standing(season=season, matchweek=standing["matchweek"] or 0, payload=standing)
             )
-            for snapshot in derived:
-                snapshot["snapshot_type"] = "completed"
-                key = (season, snapshot["matchweek"])
+            for week in derived_weeks:
+                key = (season, week)
                 existing_snapshot = await db.get(Standing, key)
                 if (
-                    existing_snapshot is None
-                    or existing_snapshot.payload.get("snapshot_type") != "completed"
+                    existing_snapshot is not None
+                    and existing_snapshot.payload.get("snapshot_type") == "completed"
                 ):
-                    await db.merge(Standing(season=season, matchweek=key[1], payload=snapshot))
+                    continue
+                # A previous official live row preserves deductions already in force
+                # at that week; otherwise the current official table is the best
+                # available reference. The derived result stays marked provisional.
+                reference_rows = (
+                    existing_snapshot.payload.get("rows")
+                    if existing_snapshot and existing_snapshot.payload.get("rows")
+                    else standing["rows"]
+                )
+                snapshot = derive_standings(
+                    matches, teams, season, week, fetched_at, reference_rows
+                )
+                snapshot["snapshot_type"] = "completed"
+                await db.merge(Standing(season=season, matchweek=week, payload=snapshot))
             await db.merge(
                 Scorers(season=season, payload={"items": scorers, "fetched_at": fetched_at})
             )
@@ -625,7 +683,7 @@ class FootballService:
                 await db.merge(ServiceState(key=cleanup_key, value=now_iso()))
             await db.commit()
         # The outbox remains in DB if retrieval is unavailable and is safe to replay.
-        await self.reconcile_index()
+        await self._reconcile_after_ingest()
 
     async def _ingest_details(self, request_id: str) -> None:
         if not self.settings.api_football_key:
@@ -689,7 +747,7 @@ class FootballService:
                     row.payload = enriched
                     await self._queue_documents(db, documents, request_id)
                     await db.commit()
-                await self.reconcile_index()
+                await self._reconcile_after_ingest()
 
     @staticmethod
     def _documents(

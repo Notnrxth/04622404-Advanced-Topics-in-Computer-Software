@@ -150,9 +150,24 @@ def completed_matchweeks(matches: list[dict]) -> list[int]:
 
 
 def derive_standings(
-    matches: list[dict], teams: list[dict], season: str, matchweek: int, fetched_at: str
+    matches: list[dict],
+    teams: list[dict],
+    season: str,
+    matchweek: int,
+    fetched_at: str,
+    reference_rows: list[dict] | None = None,
 ) -> dict:
-    """Build a historical snapshot from completed league results when upstream has moved on."""
+    """Build a provisional snapshot, retaining known official point adjustments."""
+    adjustments = {
+        row["team_id"]: row["points"] - 3 * row["won"] - row["draw"]
+        for row in reference_rows or []
+        if all(key in row for key in ("team_id", "points", "won", "draw"))
+    }
+    rank_hints = {
+        row["team_id"]: row["position"]
+        for row in reference_rows or []
+        if "team_id" in row and "position" in row
+    }
     rows = {
         team["team_id"]: {
             "position": 0,
@@ -196,12 +211,16 @@ def derive_standings(
             row[{"W": "won", "D": "draw", "L": "lost"}[result]] += 1
             row["points"] += {"W": 3, "D": 1, "L": 0}[result]
             row["form"] = (row["form"] + result)[-5:]
+    for team_id, row in rows.items():
+        row["point_adjustment"] = adjustments.get(team_id, 0)
+        row["points"] += row["point_adjustment"]
     ranked = sorted(
         rows.values(),
         key=lambda row: (
             -row["points"],
             -row["goal_difference"],
             -row["goals_for"],
+            rank_hints.get(row["team_id"], len(rows) + 1),
             row["name"],
         ),
     )

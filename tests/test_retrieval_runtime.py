@@ -19,7 +19,6 @@ import pytest
 from app.config import Settings
 from app.football import current_season
 from app.main import create_app
-from app.service import ServiceError
 from tests.test_integration import example_match
 
 BOOTSTRAP = """
@@ -177,8 +176,7 @@ async def test_real_retrieval_http_ingest_search_publish_and_recovery(tmp_path):
                     await service.unpublish(season, 5, "beat", str(uuid4()))
                     assert await search("weekly summary", "weekly_report", 5) == []
                     outage = True
-                    with pytest.raises(ServiceError):
-                        await service._ingest_primary(str(uuid4()))
+                    await service._ingest_primary(str(uuid4()))
                     assert (await service.status())["index_sync"]["pending"] > 0
                     outage = False
                     async with asyncio.timeout(5):

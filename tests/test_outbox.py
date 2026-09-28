@@ -3,7 +3,7 @@
 import asyncio
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import uuid4
 
 import httpx
@@ -72,6 +72,84 @@ async def test_batch_failure_keeps_only_failed_batch_and_retries(tmp_path):
         assert requests == [100, 100, 100, 100, 38, 100]
         assert len(indexed) == 438
         assert (await service.status())["index_sync"]["pending"] == 0
+
+
+@pytest.mark.asyncio
+async def test_upsert_changed_while_http_is_in_flight_keeps_new_outbox_work(tmp_path):
+    indexed = {}
+    calls = []
+    newer = document(1, "New matchweek content")
+
+    async def transport(request):
+        docs = json.loads(request.content)["documents"]
+        calls.append(docs[0]["text"])
+        if len(calls) == 1:
+            async with service.sessions() as db:
+                await service._queue_documents(db, [newer], str(uuid4()))
+                await db.commit()
+        indexed.update({doc["doc_id"]: doc for doc in docs})
+        return httpx.Response(200)
+
+    async with local_service(tmp_path, transport) as service:
+        async with service.sessions() as db:
+            await service._queue_documents(db, [document(1, "Old matchweek content")], str(uuid4()))
+            await db.commit()
+        await service.reconcile_index()
+        assert calls == ["Old matchweek content"]
+        async with service.sessions() as db:
+            pending = await db.get(IndexTask, newer["doc_id"])
+            assert pending is not None
+            assert pending.payload["text"] == "New matchweek content"
+        await service.reconcile_index()
+        assert calls == ["Old matchweek content", "New matchweek content"]
+        assert indexed[newer["doc_id"]]["text"] == "New matchweek content"
+        assert (await service.status())["index_sync"]["pending"] == 0
+
+
+@pytest.mark.asyncio
+async def test_failed_report_reconcile_does_not_skip_later_delete(tmp_path):
+    deleted = []
+
+    async def transport(request):
+        assert request.method == "DELETE"
+        deleted.append(request.url.path)
+        return httpx.Response(200)
+
+    async with local_service(tmp_path, transport) as service:
+        season = current_season()
+        report = report_payload(season, 5)
+        report["status"] = "published"
+        report["search_text_en"] = "x" * INDEX_MAX_BYTES
+        stamp = datetime.now(BANGKOK)
+        async with service.sessions() as db:
+            db.add(WeeklyReport(season=season, matchweek=5, status="published", payload=report))
+            db.add(
+                IndexTask(
+                    doc_id=f"weekly-{season}-mw05",
+                    action="reconcile_report",
+                    payload={"season": season, "matchweek": 5},
+                    request_id=str(uuid4()),
+                    updated_at=stamp,
+                )
+            )
+            db.add(
+                IndexTask(
+                    doc_id=document(1)["doc_id"],
+                    action="delete",
+                    payload=None,
+                    request_id=str(uuid4()),
+                    updated_at=stamp + timedelta(seconds=1),
+                )
+            )
+            await db.commit()
+        with pytest.raises(ServiceError, match="Index batch exceeds"):
+            await service.reconcile_index()
+        assert deleted == [f"/index/{document(1)['doc_id']}"]
+        async with service.sessions() as db:
+            report_task = await db.get(IndexTask, f"weekly-{season}-mw05")
+            assert report_task is not None
+            assert "Index batch exceeds" in report_task.last_error
+            assert await db.get(IndexTask, document(1)["doc_id"]) is None
 
 
 @pytest.mark.asyncio
