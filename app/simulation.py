@@ -10,6 +10,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from uuid import uuid4
@@ -39,6 +40,10 @@ N_SIMS = 10000
 SEED = 42
 RELEGATION_PLACES = 3
 UNAVAILABLE = "ระบบทำนายผลไม่พร้อมใช้งานตอนนี้"
+# 02 waits 10 s for 07, so 07 must give up on 04 sooner and still answer with a stale snapshot.
+SIMULATE_TIMEOUT_SECONDS = 5.0
+# After 04 fails, skip it for a while so queued readers get the stale snapshot at once.
+ENGINES_RETRY_SECONDS = 30.0
 
 
 def inputs_hash(inputs: dict) -> str:
@@ -46,18 +51,40 @@ def inputs_hash(inputs: dict) -> str:
     return hashlib.sha1(json.dumps(stable, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def _club_keys() -> dict[str, int | str]:
+def _club_keys(teams: dict[int, dict]) -> dict[str, int | str]:
+    """Historical club slug → current team_id.
+
+    Clubs without a team_id in historical_clubs.json are matched by name / alias against
+    the current Team rows, so a club that came back up still uses its own last season.
+    """
+    names = {}
+    for team_id, payload in teams.items():
+        for name in (payload.get("name"), payload.get("short_name"), *payload.get("aliases", [])):
+            if isinstance(name, str) and name:
+                names[name.casefold()] = team_id
     clubs = json.loads(CLUBS_PATH.read_text(encoding="utf-8"))
-    return {
-        slug: club["team_id"] if club.get("team_id") is not None else slug
-        for slug, club in clubs.items()
-    }
+    keys: dict[str, int | str] = {}
+    for slug, club in clubs.items():
+        if club.get("team_id") is not None:
+            keys[slug] = club["team_id"]
+            continue
+        candidates = (club.get("name"), *club.get("aliases", []))
+        keys[slug] = next(
+            (
+                names[n.casefold()]
+                for n in candidates
+                if isinstance(n, str) and n.casefold() in names
+            ),
+            slug,
+        )
+    return keys
 
 
 class SimulationService:
     def __init__(self, settings: Settings, sessions: async_sessionmaker, http: httpx.AsyncClient):
         self.settings, self.sessions, self.http = settings, sessions, http
         self._locks: dict[str, asyncio.Lock] = {}
+        self._engines_down_until = 0.0
 
     async def _data(self, season: str) -> tuple[dict, dict[int, dict]]:
         previous = str(int(season) - 1)
@@ -122,7 +149,7 @@ class SimulationService:
                 )
         remaining.sort(key=lambda m: m["match_id"])
 
-        keys = _club_keys()
+        keys = _club_keys(teams)
         previous_results = [
             (
                 keys.get(row.payload["home"], row.payload["home"]),
@@ -155,6 +182,15 @@ class SimulationService:
         return inputs, teams
 
     async def _engines(self, path: str, body: dict, request_id: str, timeout: float) -> dict:
+        if time.monotonic() < self._engines_down_until:
+            raise ServiceError("SIMULATION_UNAVAILABLE", 503, UNAVAILABLE)
+        try:
+            return await self._call_engines(path, body, request_id, timeout)
+        except ServiceError:
+            self._engines_down_until = time.monotonic() + ENGINES_RETRY_SECONDS
+            raise
+
+    async def _call_engines(self, path: str, body: dict, request_id: str, timeout: float) -> dict:
         url = self.settings.engines_url.rstrip("/") + path
         try:
             response = await self.http.post(
@@ -227,7 +263,7 @@ class SimulationService:
                     "/local/simulate",
                     {"request_id": request_id, "inputs": inputs, "n_sims": N_SIMS, "seed": SEED},
                     request_id,
-                    timeout=10,
+                    timeout=SIMULATE_TIMEOUT_SECONDS,
                 )
             except ServiceError:
                 async with self.sessions() as db:

@@ -15,6 +15,7 @@ def engine_handler(state):
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         state["calls"].append((request.url.path, body))
+        state.setdefault("timeouts", []).append(request.extensions.get("timeout", {}).get("read"))
         if state.get("fail"):
             return httpx.Response(503, json={"code": "LLM_UNAVAILABLE"})
         if request.url.path == "/local/predict":
@@ -287,3 +288,64 @@ async def test_ingest_refreshes_the_simulation(tmp_path):
         await app.state.service._reconcile_after_ingest()
     await http.aclose()
     assert "/local/simulate" in [path for path, _ in state["calls"]]
+
+
+async def test_club_without_team_id_in_reference_uses_its_own_history(tmp_path):
+    state = {"calls": []}
+    app, http = make(tmp_path, state)
+    season = current_season()
+    async with app.router.lifespan_context(app):
+        await seed(app, history=False)
+        async with app.state.service.sessions() as db:
+            row = await db.get(Standing, (season, 1))
+            row.payload = {
+                **row.payload,
+                "rows": [
+                    *row.payload["rows"],
+                    standing_row(76, "Wolverhampton Wanderers FC", 0, 0, 0, 0),
+                ],
+            }
+            db.add(
+                Team(
+                    team_id=76,
+                    payload={
+                        "team_id": 76,
+                        "name": "Wolverhampton Wanderers FC",
+                        "short_name": "Wolverhampton",
+                    },
+                )
+            )
+            db.add(
+                HistoricalMatch(
+                    match_id="h2",
+                    season=str(int(season) - 1),
+                    home_slug="wolves",
+                    away_slug="arsenal",
+                    payload={"home": "wolves", "away": "arsenal", "home_goals": 4, "away_goals": 0},
+                )
+            )
+            await db.commit()
+        await app.state.simulation.predict(76, 57, "req-1")
+    await http.aclose()
+    body = state["calls"][0][1]
+    # wolves has no team_id in historical_clubs.json; its own 4-0 must still count
+    assert body["home_strength"]["matches_used"] == 1
+    assert body["home_strength"]["attack"] > 3
+
+
+async def test_engines_failure_is_remembered_so_stale_is_served_fast(tmp_path):
+    state = {"calls": []}
+    app, http = make(tmp_path, state)
+    async with app.router.lifespan_context(app):
+        await seed(app)
+        await api_get(app, "/football/simulation")
+        state["fail"] = True
+        await finish_second_match(app)
+        first = await api_get(app, "/football/simulation")
+        second = await api_get(app, "/football/simulation")
+    await http.aclose()
+    assert first.json()["stale"] is True and second.json()["stale"] is True
+    # the second request must not wait on 04 again right after a failure
+    assert [path for path, _ in state["calls"]] == ["/local/simulate", "/local/simulate"]
+    # 07 must give up on 04 well before 02 (10 s) gives up on 07
+    assert max(state["timeouts"]) <= 5
