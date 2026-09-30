@@ -183,8 +183,11 @@ def create_app(
             raise ServiceError("VALIDATION_ERROR", 422, "season must be a four-digit start year")
         result = verified_season_top_scorer(season)
         if result is None:
-            raise ServiceError("HISTORICAL_SCORER_UNAVAILABLE", 404,
-                               "No verified top-scorer reference for this season")
+            raise ServiceError(
+                "HISTORICAL_SCORER_UNAVAILABLE",
+                404,
+                "No verified top-scorer reference for this season",
+            )
         return result
 
     @app.get("/football/fixtures")

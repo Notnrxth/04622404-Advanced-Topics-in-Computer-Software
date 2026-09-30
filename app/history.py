@@ -7,11 +7,12 @@ from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
+SCORER_REFERENCE_PATH = Path(__file__).parents[1] / "data/scorer_reference.json"
+
 
 def verified_season_top_scorer(season: str) -> dict | None:
     """Return only a curated Premier League winner with an official source URL."""
-    reference_path = Path(__file__).parents[1] / "data/scorer_reference.json"
-    reference = json.loads(reference_path.read_text(encoding="utf-8"))
+    reference = json.loads(SCORER_REFERENCE_PATH.read_text(encoding="utf-8"))
     record = reference.get(season)
     if not record:
         return None
@@ -20,15 +21,19 @@ def verified_season_top_scorer(season: str) -> dict | None:
     url = record.get("url")
     if (
         len(podium) < 2
+        or any(not isinstance(entry, (list, tuple)) or len(entry) < 2 for entry in podium[:2])
         or not isinstance(winner, str)
         or not winner.strip()
         or not winner.casefold().endswith(str(podium[0][0]).casefold())
         or not isinstance(podium[0][1], int)
-        or podium[0][1] <= podium[1][1]
+        or not isinstance(podium[1][1], int)
+        or podium[0][1] < podium[1][1]
         or not isinstance(url, str)
         or not url.startswith("https://www.premierleague.com/")
     ):
         raise ValueError("Historical top-scorer reference is invalid")
+    if podium[0][1] == podium[1][1]:
+        return None
     return {
         "season": season,
         "season_label": f"{season}/{(int(season) + 1) % 100:02d}",
@@ -36,6 +41,7 @@ def verified_season_top_scorer(season: str) -> dict | None:
         "goals": podium[0][1],
         "source_url": url,
     }
+
 
 MONTHS = {
     name: n
