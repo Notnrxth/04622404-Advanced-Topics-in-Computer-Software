@@ -188,7 +188,7 @@ def scorer_payload(raw: dict) -> list[dict]:
             "player": row["player"]["name"],
             "team_id": row["team"]["id"],
             "goals": row.get("goals") or 0,
-            "assists": row.get("assists") or 0,
+            "assists": row.get("assists"),
         }
         for row in raw.get("scorers", [])
     ]

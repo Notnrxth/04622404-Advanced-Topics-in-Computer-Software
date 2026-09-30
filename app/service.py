@@ -860,7 +860,14 @@ class FootballService:
                 text += "\n".join(
                     f"{rank}. {scorer['player']} "
                     f"({names.get(scorer['team_id'], scorer['team_id'])}): "
-                    f"{scorer['goals']} goals, {scorer['assists']} assists."
+                    + (
+                        f"{scorer['goals']} goals, "
+                        + (
+                            f"{scorer['assists']} assists."
+                            if scorer["assists"] is not None
+                            else "assists not reported."
+                        )
+                    )
                     for rank, scorer in enumerate(scorers, start=1)
                 )
             documents.append(
