@@ -45,6 +45,7 @@ from app.football import (
 
 BANGKOK = ZoneInfo("Asia/Bangkok")
 INDEX_MAX_BYTES = 5_000_000
+TOP_SCORERS_SHOWN = 10
 logger = logging.getLogger(__name__)
 
 
@@ -638,6 +639,7 @@ class FootballService:
             season,
             request_id,
             self._primary_throttle,
+            params={"limit": 100},
         )
         fetched_at = now_iso()
         teams = [team_payload(item) for item in teams_raw.get("teams", [])]
@@ -868,7 +870,7 @@ class FootballService:
                             else "assists not reported."
                         )
                     )
-                    for rank, scorer in enumerate(scorers, start=1)
+                    for rank, scorer in enumerate(scorers[:TOP_SCORERS_SHOWN], start=1)
                 )
             documents.append(
                 {
@@ -1123,7 +1125,7 @@ class FootballService:
             scorers_row = await db.get(Scorers, season)
             match_data = [row.payload for row in matches]
             standings_data = standings.payload["rows"]
-            scorers_data = scorers_row.payload["items"] if scorers_row else []
+            scorers_data = scorers_row.payload["items"][:TOP_SCORERS_SHOWN] if scorers_row else []
         try:
             response = await self.http.post(
                 f"{self.settings.generation_url.rstrip('/')}/report/weekly",

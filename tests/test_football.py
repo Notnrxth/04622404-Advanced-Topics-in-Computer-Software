@@ -159,4 +159,14 @@ def test_scorers_payload():
             ]
         }
     )
-    assert result == [{"player": "Example Player", "team_id": 57, "goals": 7, "assists": None}]
+    assert result == [
+        {
+            "player": "Example Player",
+            "player_id": None,
+            "team_id": 57,
+            "played_matches": None,
+            "goals": 7,
+            "assists": None,
+            "penalties": None,
+        }
+    ]

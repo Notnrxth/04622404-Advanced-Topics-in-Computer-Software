@@ -56,6 +56,7 @@ async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, pri
     season = current_season()
     indexed = {}
     fail_once = {"value": True}
+    report_requests: list[dict] = []
 
     async def upstream(request: httpx.Request) -> httpx.Response:
         path = request.url.path
@@ -102,16 +103,27 @@ async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, pri
                 },
             )
         if path.endswith("/scorers"):
+            assert request.url.params.get("limit") == "100"
             return httpx.Response(
                 200,
                 json={
                     "scorers": [
                         {
-                            "player": {"name": "Example Striker"},
+                            "player": {"id": 9001, "name": "Example Striker"},
                             "team": {"id": 57},
+                            "playedMatches": 6,
                             "goals": 7,
                             "assists": 2,
                         }
+                    ]
+                    + [
+                        {
+                            "player": {"id": 9100 + n, "name": f"Bench Scorer {n}"},
+                            "team": {"id": 61},
+                            "goals": 1,
+                            "assists": None,
+                        }
+                        for n in range(11)
                     ]
                 },
             )
@@ -126,6 +138,7 @@ async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, pri
             indexed.pop(path.removeprefix("/index/"), None)
             return httpx.Response(200, json={"deleted": True})
         if path == "/report/weekly":
+            report_requests.append(json.loads(request.content))
             return httpx.Response(
                 200,
                 json={"title": "สรุปสัปดาห์ที่ 5", "markdown": "อาร์เซนอลชนะ 2-1", "highlights": []},
@@ -192,6 +205,9 @@ async def test_ingest_replays_index_and_report_uses_completed_week(tmp_path, pri
         assert live["category"] == "standings"
 
         await service._create_report(season, 5, str(uuid4()))
+        assert len(report_requests[-1]["top_scorers"]) == 10
+        assert report_requests[-1]["top_scorers"][0]["player"] == "Example Striker"
+        assert "Bench Scorer 10" not in live["text"]
         report = await service.report(season, 5, published=False)
         assert report["status"] == "draft"
         assert "Arsenal FC 2-1 Chelsea FC" in report["search_text_en"]

@@ -186,9 +186,12 @@ def scorer_payload(raw: dict) -> list[dict]:
     return [
         {
             "player": row["player"]["name"],
+            "player_id": row["player"].get("id"),
             "team_id": row["team"]["id"],
+            "played_matches": row.get("playedMatches"),
             "goals": row.get("goals") or 0,
             "assists": row.get("assists"),
+            "penalties": row.get("penalties"),
         }
         for row in raw.get("scorers", [])
     ]
@@ -341,6 +344,7 @@ async def fetch_primary(
     season: str,
     request_id: str,
     throttle: PrimaryThrottle | None = None,
+    params: dict | None = None,
 ) -> dict:
     if not settings.football_data_api_key:
         raise UpstreamError("FOOTBALL_DATA_API_KEY is not configured")
@@ -351,7 +355,7 @@ async def fetch_primary(
         try:
             response = await http.get(
                 url,
-                params={"season": season},
+                params={"season": season, **(params or {})},
                 headers={
                     "X-Auth-Token": settings.football_data_api_key,
                     "X-Request-ID": request_id,
