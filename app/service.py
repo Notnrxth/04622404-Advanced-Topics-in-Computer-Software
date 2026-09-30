@@ -23,6 +23,7 @@ from app.db import (
     Match,
     Scorers,
     ServiceState,
+    Squad,
     Standing,
     Team,
     WeeklyReport,
@@ -36,6 +37,8 @@ from app.football import (
     match_payload,
     now_iso,
     scorer_payload,
+    squad_document,
+    squad_payload,
     standing_payload,
     team_payload,
 )
@@ -628,6 +631,11 @@ class FootballService:
         matches = [match_payload(item, fetched_at) for item in matches_raw.get("matches", [])]
         standing = standing_payload(standings_raw, season, fetched_at)
         scorers = scorer_payload(scorers_raw)
+        squads = [
+            squad
+            for item in teams_raw.get("teams", [])
+            if (squad := squad_payload(item, fetched_at))
+        ]
         completed_weeks = completed_matchweeks(matches)
         standing["snapshot_type"] = (
             "completed" if standing["matchweek"] in completed_weeks else "live"
@@ -683,8 +691,12 @@ class FootballService:
             await db.merge(
                 Scorers(season=season, payload={"items": scorers, "fetched_at": fetched_at})
             )
+            for squad in squads:
+                await db.merge(Squad(season=season, team_id=squad["team_id"], payload=squad))
             await db.merge(ServiceState(key="last_ingest_at", value=fetched_at))
             documents = self._documents(matches, standing, season, fetched_at, scorers)
+            if self.settings.player_index_enabled:
+                documents += [squad_document(squad, season) for squad in squads]
             await self._queue_documents(db, documents, request_id)
             cleanup_key = f"standings_legacy_cleanup_queued_{season}"
             if (

@@ -1,6 +1,14 @@
-import pytest
+import json
+from uuid import uuid4
 
-from app.football import squad_document, squad_payload
+import httpx
+import pytest
+from sqlalchemy import select
+
+from app.config import Settings
+from app.db import Squad
+from app.football import current_season, squad_document, squad_payload
+from app.main import create_app
 
 FETCHED_AT = "2026-09-30T10:00:00+07:00"
 
@@ -98,3 +106,84 @@ def test_squad_document_never_prints_none_for_missing_fields():
     assert "None" not in text
     assert "Coach:" not in text
     assert "Position: unknown. Date of birth: unknown. Nationality: unknown." in text
+
+
+def upstream_factory(indexed: dict, teams: list[dict]):
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path.endswith("/teams"):
+            return httpx.Response(200, json={"teams": teams})
+        if path.endswith("/matches"):
+            return httpx.Response(200, json={"matches": []})
+        if path.endswith("/standings"):
+            return httpx.Response(
+                200,
+                json={
+                    "season": {"currentMatchday": 1},
+                    "standings": [{"type": "TOTAL", "table": []}],
+                },
+            )
+        if path.endswith("/scorers"):
+            return httpx.Response(200, json={"scorers": []})
+        if path == "/index/upsert":
+            for document in json.loads(request.content)["documents"]:
+                indexed[document["doc_id"]] = document
+            return httpx.Response(200, json={"upserted": 1})
+        if request.method == "DELETE" and path.startswith("/index/"):
+            indexed.pop(path.removeprefix("/index/"), None)
+            return httpx.Response(200, json={"deleted": True})
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    return upstream
+
+
+async def run_ingest(tmp_path, teams, *, player_index_enabled):
+    indexed: dict = {}
+    settings = Settings(
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'football.db'}",
+        football_data_api_key="test-key",
+        player_index_enabled=player_index_enabled,
+        _env_file=None,
+    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_factory(indexed, teams)))
+    app = create_app(settings, http=client)
+    async with app.router.lifespan_context(app):
+        service = app.state.service
+        await service._ingest_primary(str(uuid4()))
+        await service.reconcile_index()
+        async with service.sessions() as db:
+            rows = {row.team_id: row.payload for row in await db.scalars(select(Squad))}
+    await client.aclose()
+    return indexed, rows
+
+
+async def test_ingest_stores_squads_and_indexes_player_documents_when_enabled(tmp_path):
+    season = current_season()
+    teams = [raw_team(), raw_team(id=61, name="Chelsea FC", squad=[], coach=None)]
+    indexed, rows = await run_ingest(tmp_path, teams, player_index_enabled=True)
+
+    assert set(rows) == {57}  # Chelsea has no squad, so it is skipped without failing
+    assert rows[57]["players"][1]["name"] == "Martin Ødegaard"
+    document = indexed[f"players-{season}-team-57"]
+    assert document["category"] == "player"
+    assert "## Martin Ødegaard" in document["text"]
+    assert f"players-{season}-team-61" not in indexed
+
+
+async def test_ingest_stores_squads_but_indexes_nothing_when_flag_is_off(tmp_path):
+    season = current_season()
+    indexed, rows = await run_ingest(tmp_path, [raw_team()], player_index_enabled=False)
+
+    assert set(rows) == {57}
+    assert f"players-{season}-team-57" not in indexed
+    assert not any(doc["category"] == "player" for doc in indexed.values())
+
+
+async def test_second_ingest_replaces_rows_and_keeps_one_document_per_team(tmp_path):
+    season = current_season()
+    await run_ingest(tmp_path, [raw_team()], player_index_enabled=True)
+    changed = raw_team(squad=[{"id": 7, "name": "Only Player", "position": "Defender"}])
+    indexed, rows = await run_ingest(tmp_path, [changed], player_index_enabled=True)
+
+    assert [p["name"] for p in rows[57]["players"]] == ["Only Player"]
+    assert list(indexed).count(f"players-{season}-team-57") == 1

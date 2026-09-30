@@ -51,6 +51,14 @@ class Scorers(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
+class Squad(Base):
+    __tablename__ = "squads"
+
+    season: Mapped[str] = mapped_column(String(4), primary_key=True)
+    team_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+
+
 class Job(Base):
     __tablename__ = "jobs"
 
