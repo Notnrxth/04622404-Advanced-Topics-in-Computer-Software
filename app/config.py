@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     api_football_daily_limit: int = 90
     retrieval_url: str = "http://retrieval:8000"
     generation_url: str = "http://generation:8000"
+    engines_url: str = "http://engines:8000"
     report_auto_publish: bool = False
     historical_index_enabled: bool = False
     player_index_enabled: bool = False

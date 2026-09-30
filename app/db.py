@@ -125,6 +125,17 @@ class HistoricalStanding(Base):
     payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
 
 
+class SimulationSnapshot(Base):
+    __tablename__ = "simulation_snapshots"
+
+    season: Mapped[str] = mapped_column(String(4), primary_key=True)
+    inputs_hash: Mapped[str] = mapped_column(String(40), primary_key=True)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+
 def make_database(url: str):
     # SQLite does not support schemas; translate this service's schema for local development.
     options = {"schema_translate_map": {"football": None}} if schema_for(url) is None else {}

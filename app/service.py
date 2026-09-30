@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -128,6 +129,7 @@ class FootballService:
         self._report_lock = asyncio.Lock()
         self._quota_lock = asyncio.Lock()
         self._primary_throttle = PrimaryThrottle()
+        self.after_ingest: Callable[[], Awaitable[None]] | None = None
 
     @staticmethod
     async def _latest_standing(db: AsyncSession, season: str) -> Standing | None:
@@ -419,6 +421,11 @@ class FootballService:
             await self.reconcile_index()
         except Exception:
             logger.exception("Index sync deferred; durable outbox will retry")
+        if self.after_ingest is not None:
+            try:
+                await self.after_ingest()
+            except Exception:
+                logger.exception("after-ingest hook failed")
 
     async def teams(self) -> dict:
         async with self.sessions() as db:

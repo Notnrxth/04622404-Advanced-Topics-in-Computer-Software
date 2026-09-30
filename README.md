@@ -60,6 +60,14 @@ Worker จะกู้งาน publish/unpublish ที่ค้างหลั
 
 เครดิตข้อมูลย้อนหลัง: © 2024 **Joshua C. Fjelstul, Ph.D.**, [Fjelstul English Football Database](https://github.com/jfjelstul/englishfootball), [CC-BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/legalcode); ดัดแปลงโดย normalize ชื่อทีมและแปลงตารางเป็นสรุปข้อความ ร่วมกับ [openfootball/england](https://github.com/openfootball/england) (CC0 1.0) เอกสาร/ข้อมูลย้อนหลังที่สร้างเผยแพร่ภายใต้ CC-BY-SA 4.0
 
+## ทำนายผลและจำลองฤดูกาล (CONTRACT v1.7)
+
+- `GET /football/predict?home_team_id=&away_team_id=` — คำนวณความแข็งของสองทีมแล้วเรียก 04 `/local/predict` · ไม่เก็บผล
+- `GET /football/simulation` — ผลจำลอง 10,000 ครั้ง (seed 42) ของฤดูกาลปัจจุบัน · เก็บในตาราง `simulation_snapshots` ตาม hash ของ input · คำนวณใหม่หลัง ingest · 04 ล่ม → คืนผลเก่าพร้อม `stale: true` · ไม่เคยมีผล → 503 `SIMULATION_UNAVAILABLE`
+- ความแข็งทีม (`app/strengths.py`) = ฤดูกาลนี้ผสมอัตราต่อนัดของฤดูกาลก่อน (k = 10) · ทีมเลื่อนชั้นใช้ค่าเฉลี่ยของ 3 ทีมที่ตกชั้น · ไม่มีข้อมูลฤดูกาลก่อน → ค่าเฉลี่ยลีก 1.35
+- env `ENGINES_URL` (ค่าเริ่ม `http://engines:8000`)
+- เติมข้อมูลฤดูกาลก่อนให้แม่นขึ้น: `python scripts/ingest_history.py --database-url <DATABASE_URL ของ 07>` (ดาวน์โหลดข้อมูล openfootball / fjelstul ที่ pin commit ไว้ แล้วเขียนตาราง `historical_matches`, `historical_standings`)
+
 ## งานที่ต้องทำต่อ (integration/deploy)
 
 - รีวิวล่าสุด: ตารางคะแนนใน index เปลี่ยนเป็น `standings-<season>` เดียวพร้อม cleanup แบบ retry ได้; ดาวซัลโวย้อนหลังเพิ่มเฉพาะแหล่งที่ผ่านตรวจ (2022/23 และ 2025/26) โดย cache API ของ 2023/24 และ 2024/25 ขัดกับ PL และถูกกันไว้ ดูรายละเอียดใน HISTORICAL_DATA.md
