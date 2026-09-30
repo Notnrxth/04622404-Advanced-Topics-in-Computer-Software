@@ -18,6 +18,7 @@ from sqlalchemy import text
 
 from app.config import Settings, get_settings
 from app.db import Base, make_database, schema_for
+from app.history import verified_season_top_scorer
 from app.service import FootballService, ServiceError
 
 request_id_var: ContextVar[str] = ContextVar("request_id", default="")
@@ -175,6 +176,16 @@ def create_app(
     @app.get("/football/standings")
     async def standings(season: str | None = Query(default=None, pattern=r"^\d{4}$")):
         return await service.standings(season)
+
+    @app.get("/football/history/top-scorer/{season}")
+    async def historical_top_scorer(season: str):
+        if not season.isdigit() or len(season) != 4:
+            raise ServiceError("VALIDATION_ERROR", 422, "season must be a four-digit start year")
+        result = verified_season_top_scorer(season)
+        if result is None:
+            raise ServiceError("HISTORICAL_SCORER_UNAVAILABLE", 404,
+                               "No verified top-scorer reference for this season")
+        return result
 
     @app.get("/football/fixtures")
     async def fixtures(

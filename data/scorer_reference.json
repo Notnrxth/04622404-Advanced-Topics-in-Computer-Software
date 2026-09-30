@@ -1,5 +1,6 @@
 {
   "2022": {
+    "winner_full_name": "Erling Haaland",
     "top3": [
       [
         "Haaland",
@@ -14,9 +15,10 @@
         20
       ]
     ],
-    "url": "https://www.premierleague.com/en/stats/top/players/goals/2022-23"
+    "url": "https://www.premierleague.com/en/news/3530592"
   },
   "2023": {
+    "winner_full_name": "Erling Haaland",
     "top3": [
       [
         "Haaland",
@@ -34,6 +36,7 @@
     "url": "https://www.premierleague.com/en/news/4021187"
   },
   "2024": {
+    "winner_full_name": "Mohamed Salah",
     "top3": [
       [
         "Salah",
@@ -48,9 +51,10 @@
         22
       ]
     ],
-    "url": "https://www.premierleague.com/stats?cl=161&se=429"
+    "url": "https://www.premierleague.com/en/news/4314803/salah-sweeps-202425-player-of-the-season-golden-boot-and-playmaker-awards"
   },
   "2025": {
+    "winner_full_name": "Erling Haaland",
     "top3": [
       [
         "Haaland",

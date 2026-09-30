@@ -54,6 +54,8 @@ Worker จะกู้งาน publish/unpublish ที่ค้างหลั
 
 เพิ่ม pipeline สำหรับ 34 ฤดูกาล, mapping 51 สโมสร และเอกสารย้อนหลัง 1,661 เอกสารแล้ว ดูคำสั่งใช้งาน ผลตรวจ API และข้อจำกัดใน [HISTORICAL_DATA.md](HISTORICAL_DATA.md) โดยยังปิด historical indexing จนกว่าทีมจะตกลง CONTRACT และ 05 รองรับ
 
+`GET /football/history/top-scorer/{season}` อ่านรายชื่อผู้ได้ดาวซัลโวจาก `data/scorer_reference.json` พร้อมลิงก์พรีเมียร์ลีกที่ตรวจทานแล้ว (ปีเริ่มฤดูกาล 2022–2025 เท่านั้น) และคืน 404 เมื่อไม่มีหลักฐาน การตอบคำถามนี้ไม่ได้เปิดดัชนีย้อนหลังทั้งชุดหรือใช้ cache ผู้เล่นที่ตรวจพบข้อมูลขัดแย้ง
+
 ข้อมูลสดแพ็กเกจฟรีที่ทดสอบใช้ `scope=fixtures` จาก football-data.org เท่านั้น ส่วน API-Football ใช้ปี 2024/25 สาธิต เพราะ key ฟรีนี้ไม่รองรับ 2025/26–2026/27
 
 เครดิตข้อมูลย้อนหลัง: © 2024 **Joshua C. Fjelstul, Ph.D.**, [Fjelstul English Football Database](https://github.com/jfjelstul/englishfootball), [CC-BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/legalcode); ดัดแปลงโดย normalize ชื่อทีมและแปลงตารางเป็นสรุปข้อความ ร่วมกับ [openfootball/england](https://github.com/openfootball/england) (CC0 1.0) เอกสาร/ข้อมูลย้อนหลังที่สร้างเผยแพร่ภายใต้ CC-BY-SA 4.0
