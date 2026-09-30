@@ -1,3 +1,4 @@
+import contextlib
 import json
 from uuid import uuid4
 
@@ -9,6 +10,7 @@ from app.config import Settings
 from app.db import Squad
 from app.football import current_season, squad_document, squad_payload
 from app.main import create_app
+from app.service import ServiceError
 
 FETCHED_AT = "2026-09-30T10:00:00+07:00"
 
@@ -209,3 +211,65 @@ async def test_squad_endpoint_returns_stored_payload_and_404_when_missing(tmp_pa
             missing = await api.get("/football/teams/999/squad")
             assert missing.status_code == 404
     await client.aclose()
+
+
+@pytest.mark.parametrize("coach", ["N/A", 42, ["x"]])
+def test_squad_payload_ignores_malformed_coach(coach):
+    assert squad_payload(raw_team(coach=coach), FETCHED_AT)["coach"] is None
+
+
+def test_squad_payload_skips_malformed_player_entries():
+    team = raw_team(squad=[None, "x", 3, {"id": 2, "name": "Bukayo Saka"}])
+    squad = squad_payload(team, FETCHED_AT)
+    assert [p["name"] for p in squad["players"]] == ["Bukayo Saka"]
+
+
+async def test_ingest_survives_malformed_squad_shapes(tmp_path):
+    teams = [raw_team(coach="N/A", squad=[None, {"id": 2, "name": "Bukayo Saka"}])]
+    _indexed, rows = await run_ingest(tmp_path, teams, player_index_enabled=False)
+    assert [p["name"] for p in rows[57]["players"]] == ["Bukayo Saka"]
+
+
+async def test_rejected_player_batch_does_not_block_other_documents(tmp_path):
+    season = current_season()
+    indexed: dict = {}
+    finished = {
+        "id": 12345,
+        "season": {"startDate": f"{season}-08-01"},
+        "matchday": 5,
+        "utcDate": f"{season}-09-20T11:30:00Z",
+        "status": "FINISHED",
+        "homeTeam": {"id": 57, "name": "Arsenal FC"},
+        "awayTeam": {"id": 61, "name": "Chelsea FC"},
+        "score": {"fullTime": {"home": 2, "away": 1}, "halfTime": {"home": 1, "away": 0}},
+    }
+    teams = [raw_team(), raw_team(id=61, name="Chelsea FC", squad=[], coach=None)]
+    healthy = upstream_factory(indexed, teams)
+
+    async def upstream(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/matches"):
+            return httpx.Response(200, json={"matches": [finished]})
+        if request.url.path == "/index/upsert":
+            documents = json.loads(request.content)["documents"]
+            if any(doc["category"] == "player" for doc in documents):
+                return httpx.Response(422)  # 05 does not know category "player" yet
+        return await healthy(request)
+
+    settings = Settings(
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'football.db'}",
+        football_data_api_key="test-key",
+        player_index_enabled=True,
+        _env_file=None,
+    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+    app = create_app(settings, http=client)
+    async with app.router.lifespan_context(app):
+        service = app.state.service
+        await service._ingest_primary(str(uuid4()))
+        with contextlib.suppress(ServiceError):
+            await service.reconcile_index()
+    await client.aclose()
+
+    assert f"match-{season}-mw05-57-61" in indexed
+    assert f"standings-{season}" in indexed
+    assert f"players-{season}-team-57" not in indexed

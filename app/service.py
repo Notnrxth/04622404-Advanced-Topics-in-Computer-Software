@@ -298,8 +298,14 @@ class FootballService:
                     non_upserts.append(task)
                     continue
                 candidate = [*documents, task.payload]
+                # Player documents travel alone so a rejected category cannot strand the rest.
+                mixes_player = bool(documents) and (
+                    (documents[0].get("category") == "player")
+                    != (task.payload.get("category") == "player")
+                )
                 if batch and (
-                    len(candidate)
+                    mixes_player
+                    or len(candidate)
                     > (50 if any(doc.get("category") == "historical" for doc in candidate) else 100)
                     or len(index_body(candidate, task.request_id)) > INDEX_MAX_BYTES
                 ):

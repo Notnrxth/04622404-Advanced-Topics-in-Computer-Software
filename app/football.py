@@ -69,6 +69,7 @@ def team_payload(raw: dict) -> dict:
 
 
 def squad_payload(raw_team: dict, fetched_at: str) -> dict | None:
+    squad = raw_team.get("squad")
     players = [
         {
             "id": item.get("id"),
@@ -77,12 +78,13 @@ def squad_payload(raw_team: dict, fetched_at: str) -> dict | None:
             "date_of_birth": item.get("dateOfBirth"),
             "nationality": item.get("nationality"),
         }
-        for item in raw_team.get("squad") or []
-        if item.get("name")
+        for item in (squad if isinstance(squad, list) else [])
+        if isinstance(item, dict) and item.get("name")
     ]
     if not players:
         return None
-    coach = raw_team.get("coach") or {}
+    coach = raw_team.get("coach")
+    coach = coach if isinstance(coach, dict) else {}
     return {
         "team_id": raw_team["id"],
         "team_name": raw_team["name"],
