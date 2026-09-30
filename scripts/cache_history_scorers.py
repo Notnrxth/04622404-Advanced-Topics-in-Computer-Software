@@ -14,10 +14,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from app.config import Settings
 from app.history import resolve
+from scripts.env_file import repo_env_file
 
 
 async def main():
-    settings = Settings(_env_file=ROOT.parents[1] / ".env")
+    settings = Settings(_env_file=repo_env_file(ROOT))
     raw = ROOT / "data/raw/history/scorers"
     raw.mkdir(parents=True, exist_ok=True)
     clubs = json.loads((ROOT / "data/historical_clubs.json").read_text(encoding="utf-8"))

@@ -18,6 +18,7 @@ from app.api_football import enriched_match, match_api_fixture
 from app.config import Settings
 from app.football import bangkok_iso
 from app.history import resolve
+from scripts.env_file import repo_env_file
 
 RAW = ROOT / "data/raw/provider-smoke"
 
@@ -66,7 +67,7 @@ def build_demo():
 
 async def main(offline):
     if not offline:
-        settings = Settings(_env_file=ROOT.parents[1] / ".env")
+        settings = Settings(_env_file=repo_env_file(ROOT))
         # One request; remaining event/lineup/statistic inputs came from check_providers.
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.get(

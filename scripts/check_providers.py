@@ -15,10 +15,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from app.config import Settings
 from app.football import current_season
+from scripts.env_file import repo_env_file
 
 
 async def main():
-    settings = Settings(_env_file=ROOT.parents[1] / ".env")
+    settings = Settings(_env_file=repo_env_file(ROOT))
     output = ROOT / "data" / "raw" / "provider-smoke"
     output.mkdir(parents=True, exist_ok=True)
     summary = {"tested_at": datetime.now(UTC).isoformat(), "football_data": {}, "api_football": {}}

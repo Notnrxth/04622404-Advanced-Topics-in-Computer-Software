@@ -66,7 +66,16 @@ Worker จะกู้งาน publish/unpublish ที่ค้างหลั
 - `GET /football/simulation` — ผลจำลอง 10,000 ครั้ง (seed 42) ของฤดูกาลปัจจุบัน · เก็บในตาราง `simulation_snapshots` ตาม hash ของ input · คำนวณใหม่หลัง ingest · 04 ล่ม → คืนผลเก่าพร้อม `stale: true` · ไม่เคยมีผล → 503 `SIMULATION_UNAVAILABLE`
 - ความแข็งทีม (`app/strengths.py`) = ฤดูกาลนี้ผสมอัตราต่อนัดของฤดูกาลก่อน (k = 10) · ทีมเลื่อนชั้นใช้ค่าเฉลี่ยของ 3 ทีมที่ตกชั้น · ไม่มีข้อมูลฤดูกาลก่อน → ค่าเฉลี่ยลีก 1.35
 - env `ENGINES_URL` (ค่าเริ่ม `http://engines:8000`)
-- เติมข้อมูลฤดูกาลก่อนให้แม่นขึ้น: `python scripts/ingest_history.py --database-url <DATABASE_URL ของ 07>` (ดาวน์โหลดข้อมูล openfootball / fjelstul ที่ pin commit ไว้ แล้วเขียนตาราง `historical_matches`, `historical_standings`)
+- เติมข้อมูลฤดูกาลก่อนให้แม่นขึ้น — ข้อมูลนี้อยู่ใน Postgres ของแต่ละเครื่อง ไม่ได้มากับ git ต้องรันเองครั้งแรก และรันใหม่หลังลบ volume ของ Postgres ถ้าไม่รัน ระบบยังทำงานได้แต่ใช้ค่าเฉลี่ยลีก 1.35 แทนฟอร์มฤดูกาลก่อนของแต่ละทีม (ดู log `strength_prior_league_average`)
+
+  ```bash
+  docker compose -p football-assistant exec football-data sh -c 'python scripts/ingest_history.py --database-url "$DATABASE_URL"'
+  ```
+
+  - คำสั่งนี้ดาวน์โหลดข้อมูล openfootball / fjelstul ตาม commit ที่ pin ไว้ แล้วเขียนตาราง `historical_matches` และ `historical_standings` · รันซ้ำได้ (upsert) · สำเร็จแล้วจะพิมพ์สรุปที่มี `"seasons": 34`
+  - ใน container ไม่มีไฟล์ `.env` ของ repo · script ใช้ env ของ container แทน (`DATABASE_URL` มาจาก `docker-compose.yml`)
+  - บนเครื่องที่มี repo ครบ รันจากโฟลเดอร์ `services/07_football_data` ได้ตรง ๆ ตาม [HISTORICAL_DATA.md](HISTORICAL_DATA.md) (ค่าเริ่มต้นเขียนลง SQLite ในเครื่อง ไม่ใช่ DB ของ Docker)
+  - เมื่อขึ้นฤดูกาลใหม่ ต้องเลื่อน commit ที่ pin ใน `scripts/ingest_history.py` / `scripts/download_history.py` ให้มีผลของฤดูกาลที่เพิ่งจบ แล้วรันคำสั่งนี้อีกครั้ง
 
 ## งานที่ต้องทำต่อ (integration/deploy)
 

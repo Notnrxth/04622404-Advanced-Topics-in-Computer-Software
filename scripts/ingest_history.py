@@ -33,6 +33,7 @@ from app.history import (
 )
 from app.service import FootballService
 from scripts.download_history import main as download
+from scripts.env_file import repo_env_file
 
 PINNED = {
     "openfootball": "b17e8f01707d83d2ce1790c14d4a5eeb35987825",
@@ -168,7 +169,7 @@ async def main(args):
         "scorer_validation": {year: row["status"] for year, row in validation.items()},
     }
     (generated / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    settings = Settings(_env_file=ROOT.parents[1] / ".env", database_url=args.database_url)
+    settings = Settings(_env_file=repo_env_file(ROOT), database_url=args.database_url)
     if args.index and not settings.historical_index_enabled:
         raise ValueError(
             "Historical CONTRACT/05 integration is not enabled. Agree contract first, "
