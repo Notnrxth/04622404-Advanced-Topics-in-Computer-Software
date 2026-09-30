@@ -127,7 +127,7 @@ class SimulationService:
         )
         team_ids = [row["team_id"] for row in table]
         current_results = []
-        remaining = []
+        unplayed = []
         for match in matches:
             if match.status == "FINISHED":
                 score = match.payload.get("score") or {}
@@ -140,13 +140,26 @@ class SimulationService:
                 and match.home_team_id in team_ids
                 and match.away_team_id in team_ids
             ):
-                remaining.append(
-                    {
-                        "match_id": match.match_id,
-                        "home_team_id": match.home_team_id,
-                        "away_team_id": match.away_team_id,
-                    }
-                )
+                unplayed.append(match)
+        # A live match may already be in the provider's table. When a team's `played` is
+        # ahead of its finished matches, that live match is counted and must not be
+        # simulated again; otherwise it is still to play.
+        counted_live = {team_id: 0 for team_id in team_ids}
+        for row in table:
+            counted_live[row["team_id"]] = row["played"]
+        for home, away, _home_goals, _away_goals in current_results:
+            counted_live[home] = counted_live.get(home, 0) - 1
+            counted_live[away] = counted_live.get(away, 0) - 1
+        remaining = []
+        for match in sorted(unplayed, key=lambda m: m.payload.get("kickoff") or ""):
+            home, away = match.home_team_id, match.away_team_id
+            if match.status == "LIVE" and counted_live[home] > 0 and counted_live[away] > 0:
+                counted_live[home] -= 1
+                counted_live[away] -= 1
+                continue
+            remaining.append(
+                {"match_id": match.match_id, "home_team_id": home, "away_team_id": away}
+            )
         remaining.sort(key=lambda m: m["match_id"])
 
         keys = _club_keys(teams)
@@ -227,6 +240,9 @@ class SimulationService:
         strengths = inputs["strengths"]
         if str(home_team_id) not in strengths or str(away_team_id) not in strengths:
             raise ServiceError("NOT_FOUND", 404, "ไม่พบทีมนี้ในฤดูกาลปัจจุบัน")
+        fixture = await self._next_fixture(inputs["season"], home_team_id, away_team_id)
+        if fixture is not None:
+            home_team_id, away_team_id = fixture
         names = {row["team_id"]: row["name"] for row in inputs["table"]}
         result = await self._engines(
             "/local/predict",
@@ -247,6 +263,26 @@ class SimulationService:
         result["data"]["as_of"] = inputs["as_of"]
         return result
 
+    async def _next_fixture(self, season: str, team_a: int, team_b: int) -> tuple[int, int] | None:
+        """(home, away) of the next unplayed meeting, so home advantage goes to the real host."""
+        pair = ((Match.home_team_id == team_a) & (Match.away_team_id == team_b)) | (
+            (Match.home_team_id == team_b) & (Match.away_team_id == team_a)
+        )
+        async with self.sessions() as db:
+            rows = (
+                await db.scalars(
+                    select(Match).where(
+                        Match.season == season,
+                        Match.status.not_in(("FINISHED", "CANCELLED")),
+                        pair,
+                    )
+                )
+            ).all()
+        if not rows:
+            return None
+        upcoming = min(rows, key=lambda m: m.payload.get("kickoff") or "")
+        return upcoming.home_team_id, upcoming.away_team_id
+
     async def snapshot(self, season: str | None, request_id: str) -> dict:
         selected = season or current_season()
         if selected != current_season():
@@ -257,7 +293,8 @@ class SimulationService:
             async with self.sessions() as db:
                 row = await db.get(SimulationSnapshot, (selected, digest))
                 if row is not None:
-                    return {**row.payload, "stale": False}
+                    # same inputs, but the data may have been re-checked since it was computed
+                    return {**row.payload, "as_of": inputs["as_of"], "stale": False}
             try:
                 result = await self._engines(
                     "/local/simulate",

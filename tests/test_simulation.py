@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from app.config import Settings
-from app.db import HistoricalMatch, Match, Standing, Team
+from app.db import HistoricalMatch, Match, ServiceState, Standing, Team
 from app.football import current_season
 from app.main import create_app
 from app.service import ServiceError
@@ -174,12 +174,12 @@ async def test_predict_sends_strengths_and_names(tmp_path, history):
     app, http = make(tmp_path, state)
     async with app.router.lifespan_context(app):
         await seed(app, history=history)
-        result = await app.state.simulation.predict(57, 61, "req-1")
+        result = await app.state.simulation.predict(61, 57, "req-1")
     await http.aclose()
     path, body = state["calls"][0]
     assert path == "/local/predict"
-    assert (body["home_name"], body["away_name"]) == ("Arsenal", "Chelsea")
-    assert body["home_strength"]["attack"] > body["away_strength"]["attack"]
+    assert (body["home_name"], body["away_name"]) == ("Chelsea", "Arsenal")
+    assert body["away_strength"]["attack"] > body["home_strength"]["attack"]
     assert body["league_avg_goals"] > 0
     assert "as_of" in result["data"]
 
@@ -349,3 +349,59 @@ async def test_engines_failure_is_remembered_so_stale_is_served_fast(tmp_path):
     assert [path for path, _ in state["calls"]] == ["/local/simulate", "/local/simulate"]
     # 07 must give up on 04 well before 02 (10 s) gives up on 07
     assert max(state["timeouts"]) <= 5
+
+
+async def test_predict_uses_the_home_side_of_the_next_fixture(tmp_path):
+    state = {"calls": []}
+    app, http = make(tmp_path, state)
+    async with app.router.lifespan_context(app):
+        await seed(app)  # m2: Chelsea (61) at home to Arsenal (57), not played yet
+        await app.state.simulation.predict(57, 61, "req-1")
+    await http.aclose()
+    body = state["calls"][0][1]
+    assert (body["home_team_id"], body["away_team_id"]) == (61, 57)
+    assert body["home_name"] == "Chelsea"
+
+
+async def test_cached_snapshot_reports_the_latest_data_time(tmp_path):
+    state = {"calls": []}
+    app, http = make(tmp_path, state)
+    async with app.router.lifespan_context(app):
+        await seed(app)
+        await app.state.simulation.snapshot(None, "req-1")
+        async with app.state.service.sessions() as db:
+            await db.merge(ServiceState(key="last_ingest_at", value="2026-10-02T09:00:00+07:00"))
+            await db.commit()
+        again = await app.state.simulation.snapshot(None, "req-2")
+    await http.aclose()
+    assert [path for path, _ in state["calls"]] == ["/local/simulate"]
+    assert again["as_of"] == "2026-10-02T09:00:00+07:00"
+
+
+async def set_m2_live(app, *, counted_in_table):
+    season = current_season()
+    async with app.state.service.sessions() as db:
+        match = await db.get(Match, "m2")
+        match.status = "LIVE"
+        if counted_in_table:
+            standing = await db.get(Standing, (season, 1))
+            standing.payload = {
+                **standing.payload,
+                "rows": [{**row, "played": row["played"] + 1} for row in standing.payload["rows"]],
+            }
+        await db.commit()
+
+
+@pytest.mark.parametrize("counted_in_table, simulated", [(True, False), (False, True)])
+async def test_live_match_is_simulated_only_if_the_table_has_not_counted_it(
+    tmp_path, counted_in_table, simulated
+):
+    state = {"calls": []}
+    app, http = make(tmp_path, state)
+    async with app.router.lifespan_context(app):
+        await seed(app)
+        await set_m2_live(app, counted_in_table=counted_in_table)
+        await app.state.simulation.snapshot(None, "req-1")
+    await http.aclose()
+    remaining = [m["match_id"] for m in state["calls"][0][1]["inputs"]["remaining"]]
+    assert ("m2" in remaining) is simulated
