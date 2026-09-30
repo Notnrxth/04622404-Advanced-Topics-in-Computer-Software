@@ -68,6 +68,61 @@ def team_payload(raw: dict) -> dict:
     }
 
 
+def squad_payload(raw_team: dict, fetched_at: str) -> dict | None:
+    players = [
+        {
+            "id": item.get("id"),
+            "name": item["name"],
+            "position": item.get("position"),
+            "date_of_birth": item.get("dateOfBirth"),
+            "nationality": item.get("nationality"),
+        }
+        for item in raw_team.get("squad") or []
+        if item.get("name")
+    ]
+    if not players:
+        return None
+    coach = raw_team.get("coach") or {}
+    return {
+        "team_id": raw_team["id"],
+        "team_name": raw_team["name"],
+        "coach": (
+            {"id": coach.get("id"), "name": coach["name"], "nationality": coach.get("nationality")}
+            if coach.get("name")
+            else None
+        ),
+        "players": players,
+        "fetched_at": fetched_at,
+    }
+
+
+def squad_document(squad: dict, season: str) -> dict:
+    team = squad["team_name"]
+    intro = f"Premier League {season} squad: {team}."
+    if squad["coach"]:
+        intro += f" Coach: {squad['coach']['name']}."
+    sections = [
+        f"## {player['name']}\n"
+        f"Team: {team}. Position: {player['position'] or 'unknown'}. "
+        f"Date of birth: {player['date_of_birth'] or 'unknown'}. "
+        f"Nationality: {player['nationality'] or 'unknown'}."
+        for player in squad["players"]
+    ]
+    return {
+        "doc_id": f"players-{season}-team-{squad['team_id']}",
+        "title": f"{team} squad {season}",
+        "text": intro + "\n\n" + "\n\n".join(sections),
+        "category": "player",
+        "origin": "football-data.org",
+        "season": season,
+        "matchweek": None,
+        "team_ids": [squad["team_id"]],
+        "date": squad["fetched_at"][:10],
+        "fetched_at": squad["fetched_at"],
+        "url": None,
+    }
+
+
 def match_payload(raw: dict, fetched_at: str) -> dict:
     home, away = raw["homeTeam"], raw["awayTeam"]
     score = raw.get("score") or {}
