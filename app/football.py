@@ -98,18 +98,39 @@ def squad_payload(raw_team: dict, fetched_at: str) -> dict | None:
     }
 
 
-def squad_document(squad: dict, season: str) -> dict:
+def season_stats_line(stat: dict, season: str, as_of: str) -> str:
+    def reported(value) -> str:
+        return "not reported" if value is None else str(value)
+
+    games = (
+        f" in {stat['played_matches']} matches" if stat.get("played_matches") is not None else ""
+    )
+    return (
+        f"Premier League {season} season so far (as of {as_of}): "
+        f"{stat['goals']} goals{games}. Assists: {reported(stat.get('assists'))}. "
+        f"Penalty goals: {reported(stat.get('penalties'))}."
+    )
+
+
+def squad_document(squad: dict, season: str, stats: dict[int, dict] | None = None) -> dict:
     team = squad["team_name"]
+    as_of = squad["fetched_at"][:10]
+    stats = stats or {}
     intro = f"Premier League {season} squad: {team}."
     if squad["coach"]:
         intro += f" Coach: {squad['coach']['name']}."
-    sections = [
-        f"## {player['name']}\n"
-        f"Team: {team}. Position: {player['position'] or 'unknown'}. "
-        f"Date of birth: {player['date_of_birth'] or 'unknown'}. "
-        f"Nationality: {player['nationality'] or 'unknown'}."
-        for player in squad["players"]
-    ]
+    sections = []
+    for player in squad["players"]:
+        section = (
+            f"## {player['name']}\n"
+            f"Team: {team}. Position: {player['position'] or 'unknown'}. "
+            f"Date of birth: {player['date_of_birth'] or 'unknown'}. "
+            f"Nationality: {player['nationality'] or 'unknown'}."
+        )
+        stat = stats.get(player["id"]) if player["id"] is not None else None
+        if stat:
+            section += "\n" + season_stats_line(stat, season, as_of)
+        sections.append(section)
     return {
         "doc_id": f"players-{season}-team-{squad['team_id']}",
         "title": f"{team} squad {season}",
@@ -119,7 +140,7 @@ def squad_document(squad: dict, season: str) -> dict:
         "season": season,
         "matchweek": None,
         "team_ids": [squad["team_id"]],
-        "date": squad["fetched_at"][:10],
+        "date": as_of,
         "fetched_at": squad["fetched_at"],
         "url": None,
     }

@@ -273,3 +273,32 @@ async def test_rejected_player_batch_does_not_block_other_documents(tmp_path):
     assert f"match-{season}-mw05-57-61" in indexed
     assert f"standings-{season}" in indexed
     assert f"players-{season}-team-57" not in indexed
+
+
+async def test_ingest_puts_scorer_stats_into_the_player_document(tmp_path, monkeypatch):
+    import app.service as service_module
+
+    season = current_season()
+    original = service_module.fetch_primary
+
+    async def fake_fetch(http, settings, path, season_, request_id, throttle=None, params=None):
+        if path.endswith("/scorers"):
+            return {
+                "scorers": [
+                    {
+                        "player": {"id": 4001, "name": "Martin Ødegaard"},
+                        "team": {"id": 57},
+                        "playedMatches": 6,
+                        "goals": 2,
+                        "assists": None,
+                        "penalties": None,
+                    }
+                ]
+            }
+        return await original(http, settings, path, season_, request_id, throttle, params)
+
+    monkeypatch.setattr(service_module, "fetch_primary", fake_fetch)
+    indexed, _rows = await run_ingest(tmp_path, [raw_team()], player_index_enabled=True)
+    text = indexed[f"players-{season}-team-57"]["text"]
+    assert "2 goals in 6 matches. Assists: not reported." in text
+    assert text.count("season so far") == 1

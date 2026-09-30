@@ -711,7 +711,8 @@ class FootballService:
             await db.merge(ServiceState(key="last_ingest_at", value=fetched_at))
             documents = self._documents(matches, standing, season, fetched_at, scorers)
             if self.settings.player_index_enabled:
-                documents += [squad_document(squad, season) for squad in squads]
+                stats = {s["player_id"]: s for s in scorers if s["player_id"] is not None}
+                documents += [squad_document(squad, season, stats) for squad in squads]
             await self._queue_documents(db, documents, request_id)
             cleanup_key = f"standings_legacy_cleanup_queued_{season}"
             if (

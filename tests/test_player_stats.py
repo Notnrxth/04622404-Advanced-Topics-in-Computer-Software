@@ -1,7 +1,7 @@
 import httpx
 
 from app.config import Settings
-from app.football import fetch_primary, scorer_payload
+from app.football import fetch_primary, scorer_payload, squad_document
 from app.service import FootballService
 
 FETCHED_AT = "2026-09-30T10:00:00+07:00"
@@ -100,3 +100,55 @@ def test_standings_document_shows_only_the_top_ten():
     text = standings_text(scorers)
     assert "10. Player 10 " in text
     assert "Player 11" not in text
+
+
+SQUAD = {
+    "team_id": 57,
+    "team_name": "Arsenal FC",
+    "coach": None,
+    "fetched_at": FETCHED_AT,
+    "players": [
+        {
+            "id": 7,
+            "name": "Bukayo Saka",
+            "position": "Winger",
+            "date_of_birth": "2001-09-05",
+            "nationality": "England",
+        },
+        {
+            "id": 8,
+            "name": "Martin Ødegaard",
+            "position": "Midfielder",
+            "date_of_birth": "1998-12-17",
+            "nationality": "Norway",
+        },
+    ],
+}
+
+
+def section(text: str, name: str) -> str:
+    return text.split(f"## {name}\n", 1)[1].split("\n\n## ", 1)[0]
+
+
+def test_player_with_stats_gets_a_season_line_under_their_own_heading():
+    stats = {7: {"player_id": 7, "played_matches": 6, "goals": 3, "assists": 2, "penalties": None}}
+    text = squad_document(SQUAD, "2026", stats)["text"]
+    assert section(text, "Bukayo Saka").endswith(
+        "Premier League 2026 season so far (as of 2026-09-30): 3 goals in 6 matches. "
+        "Assists: 2. Penalty goals: not reported."
+    )
+    assert "season so far" not in section(text, "Martin Ødegaard")
+
+
+def test_missing_played_matches_drops_the_match_count():
+    stats = {
+        8: {"player_id": 8, "played_matches": None, "goals": 1, "assists": None, "penalties": 0}
+    }
+    line = section(squad_document(SQUAD, "2026", stats)["text"], "Martin Ødegaard")
+    assert "(as of 2026-09-30): 1 goals. Assists: not reported. Penalty goals: 0." in line
+    assert "None" not in line
+
+
+def test_no_stats_keeps_the_layer_one_document_unchanged():
+    assert squad_document(SQUAD, "2026") == squad_document(SQUAD, "2026", {})
+    assert "season so far" not in squad_document(SQUAD, "2026")["text"]
