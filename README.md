@@ -4,11 +4,12 @@ FastAPI service สำหรับข้อมูลพรีเมียร์�
 
 ## สิ่งที่มีแล้ว
 
-- `GET /health`, `/ready`, `/football/status`, `/football/teams`, `/football/standings`, `/football/fixtures`, `/football/matches/{match_id}`
+- `GET /health`, `/ready`, `/football/status`, `/football/teams`, `/football/teams/{team_id}/squad`, `/football/standings`, `/football/fixtures`, `/football/matches/{match_id}`
 - `POST /ingest/run` รับ `scope=fixtures|details|all`: ดึง teams, matches, standings, scorers จาก football-data.org v4 และรายละเอียดนัดที่จบแล้วจาก API-Football; `details`/`all` ต้องตั้ง `API_FOOTBALL_KEY` ไม่เช่นนั้นตอบข้อผิดพลาดก่อนสร้าง job
 - เก็บ API-Football quota ในฐานข้อมูล (จำกัด 90 คำขอต่อวัน UTC รวม retry), จับคู่ fixture จากวันเวลาและทีม, และเก็บ events/lineups/statistics ใน payload ของแมตช์
 - บันทึกงานส่ง index ในฐานข้อมูล มี background worker ส่งซ้ำอัตโนมัติระหว่าง process ทำงาน (เริ่มรอ 2 วินาที, backoff สูงสุด 60 วินาที) หรือสั่ง `POST /index/reconcile`; `/football/status` แสดงงานค้าง, `last_error` และ quota แยกจากข้อมูลใน DB
 - Upsert แบ่ง batch 1–100 เอกสารและ body ไม่เกิน 5,000,000 UTF-8 bytes; ล้างเฉพาะงานที่ส่งสำเร็จ ส่วนเอกสารเดี่ยวที่ใหญ่เกินกำหนดคงไว้พร้อม error ให้แก้
+- ingest เก็บ squad ของทุกทีมจาก response เดิมของ `competitions/PL/teams` (ตาราง `squads`, ไม่เพิ่มการเรียก API); เอกสาร `category=player` (`players-<season>-team-<team_id>`) จะเข้า index ก็ต่อเมื่อ `PLAYER_INDEX_ENABLED=true` หลัง 05 รองรับ category `player` แล้วเท่านั้น
 - `/football/standings` และ status เลือก snapshot สัปดาห์ที่จบแล้วล่าสุดถ้ามี; snapshot ระหว่างสัปดาห์ติดป้าย `live` ชัดเจน ส่วนดาวซัลโวปัจจุบันอยู่ในเอกสาร `category=standings` พร้อมเวลาข้อมูล
 - `GET /jobs`, `/jobs/{job_id}` สำหรับติดตาม job; ป้องกันการสั่ง job ชนิดเดียวกันซ้ำในระดับแอป
 - `POST /reports/weekly/run` เรียกโมดูล 06 เพื่อสร้าง draft เมื่อแมตช์วีคจบครบ โดยสร้าง snapshot ตารางคะแนนย้อนหลังจากผลแข่งได้เมื่อ `currentMatchday` ขยับไปแล้ว; รายการ/อ่าน/แก้ไข/publish/unpublish รายงาน โดยมีงานชดเชยกรณีอัปเดต index สำเร็จแต่ DB commit ล้ม

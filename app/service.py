@@ -418,6 +418,13 @@ class FootballService:
             rows = (await db.scalars(select(Team).order_by(Team.team_id))).all()
             return {"teams": [row.payload for row in rows]}
 
+    async def squad(self, team_id: int, season: str | None) -> dict:
+        async with self.sessions() as db:
+            row = await db.get(Squad, (season or current_season(), team_id))
+            if row is None:
+                raise ServiceError("NOT_FOUND", 404, "ยังไม่มีข้อมูลนักเตะของทีมนี้")
+            return row.payload
+
     async def standings(self, season: str | None) -> dict:
         async with self.sessions() as db:
             row = await self._latest_standing(db, season or current_season())

@@ -187,3 +187,25 @@ async def test_second_ingest_replaces_rows_and_keeps_one_document_per_team(tmp_p
 
     assert [p["name"] for p in rows[57]["players"]] == ["Only Player"]
     assert list(indexed).count(f"players-{season}-team-57") == 1
+
+
+async def test_squad_endpoint_returns_stored_payload_and_404_when_missing(tmp_path):
+    settings = Settings(
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'football.db'}",
+        football_data_api_key="test-key",
+        _env_file=None,
+    )
+    client = httpx.AsyncClient(transport=httpx.MockTransport(upstream_factory({}, [raw_team()])))
+    app = create_app(settings, http=client)
+    async with app.router.lifespan_context(app):
+        await app.state.service._ingest_primary(str(uuid4()))
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as api:
+            found = await api.get("/football/teams/57/squad")
+            assert found.status_code == 200
+            assert found.json()["team_name"] == "Arsenal FC"
+            assert len(found.json()["players"]) == 2
+
+            missing = await api.get("/football/teams/999/squad")
+            assert missing.status_code == 404
+    await client.aclose()

@@ -166,6 +166,12 @@ def create_app(
     async def teams():
         return await service.teams()
 
+    @app.get("/football/teams/{team_id}/squad")
+    async def team_squad(
+        team_id: int, season: str | None = Query(default=None, pattern=r"^\d{4}$")
+    ):
+        return await service.squad(team_id, season)
+
     @app.get("/football/standings")
     async def standings(season: str | None = Query(default=None, pattern=r"^\d{4}$")):
         return await service.standings(season)
