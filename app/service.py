@@ -28,6 +28,7 @@ from app.db import (
     WeeklyReport,
 )
 from app.football import (
+    PrimaryThrottle,
     completed_matchweeks,
     current_season,
     derive_standings,
@@ -122,6 +123,7 @@ class FootballService:
         self._index_lock = asyncio.Lock()
         self._report_lock = asyncio.Lock()
         self._quota_lock = asyncio.Lock()
+        self._primary_throttle = PrimaryThrottle()
 
     @staticmethod
     async def _latest_standing(db: AsyncSession, season: str) -> Standing | None:
@@ -590,16 +592,36 @@ class FootballService:
         season = current_season()
         # Fetch all responses before changing any database rows.
         teams_raw = await fetch_primary(
-            self.http, self.settings, "competitions/PL/teams", season, request_id
+            self.http,
+            self.settings,
+            "competitions/PL/teams",
+            season,
+            request_id,
+            self._primary_throttle,
         )
         matches_raw = await fetch_primary(
-            self.http, self.settings, "competitions/PL/matches", season, request_id
+            self.http,
+            self.settings,
+            "competitions/PL/matches",
+            season,
+            request_id,
+            self._primary_throttle,
         )
         standings_raw = await fetch_primary(
-            self.http, self.settings, "competitions/PL/standings", season, request_id
+            self.http,
+            self.settings,
+            "competitions/PL/standings",
+            season,
+            request_id,
+            self._primary_throttle,
         )
         scorers_raw = await fetch_primary(
-            self.http, self.settings, "competitions/PL/scorers", season, request_id
+            self.http,
+            self.settings,
+            "competitions/PL/scorers",
+            season,
+            request_id,
+            self._primary_throttle,
         )
         fetched_at = now_iso()
         teams = [team_payload(item) for item in teams_raw.get("teams", [])]
