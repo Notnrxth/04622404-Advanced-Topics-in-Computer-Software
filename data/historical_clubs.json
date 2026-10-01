@@ -90,7 +90,7 @@
   },
   "burnley": {
     "name": "Burnley FC",
-    "team_id": null,
+    "team_id": 328,
     "aliases": [
       "Burnley",
       "Burnley FC"
@@ -383,7 +383,7 @@
   },
   "west-ham": {
     "name": "West Ham United FC",
-    "team_id": null,
+    "team_id": 563,
     "aliases": [
       "West Ham",
       "West Ham United",
@@ -407,7 +407,7 @@
   },
   "wolves": {
     "name": "Wolverhampton Wanderers FC",
-    "team_id": null,
+    "team_id": 76,
     "aliases": [
       "Wolverhampton Wanderers",
       "Wolves",

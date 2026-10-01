@@ -1,5 +1,8 @@
 """History parser tests require no network or provider credentials."""
 
+import json
+from pathlib import Path
+
 import pytest
 from sqlalchemy import func, select
 
@@ -228,3 +231,11 @@ def test_bad_api_scorer_podium_is_rejected(tmp_path):
     sources, validation = load_scorer_sources(tmp_path, clubs, {"2025": season}, {"2025": "pinned"})
     assert "2023" not in sources
     assert validation["2023"]["status"] == "rejected"
+
+
+def test_current_premier_league_clubs_keep_their_team_id_in_the_archive():
+    """Archive documents carry team_ids, so clubs in this season's league need theirs (v1.11)."""
+    path = Path(__file__).parents[1] / "data/historical_clubs.json"
+    clubs = json.loads(path.read_text("utf-8"))
+    current = {"west-ham": 563, "wolves": 76, "burnley": 328, "arsenal": 57, "sunderland": 71}
+    assert {slug: clubs[slug]["team_id"] for slug in current} == current
