@@ -10,6 +10,7 @@ from app.db import HistoricalMatch, HistoricalStanding, make_database
 from app.history import (
     calculate_table,
     historical_document,
+    load_fjelstul_champions,
     make_documents,
     normalize,
     parse_season,
@@ -316,3 +317,67 @@ def test_historical_document_adds_credit_and_known_team_ids():
         None,
         None,
     )
+
+
+FJELSTUL_HEADER = "season,tier,position,team_id,team_name\n"
+EARLY_CLUBS = {
+    "sheffield-wednesday": {"name": "Sheffield Wednesday FC", "fjelstul_team_id": "T-027"},
+    "aston-villa": {"name": "Aston Villa FC", "fjelstul_team_id": "T-002"},
+    "everton": {"name": "Everton FC"},  # no Fjelstul id: never matched
+}
+
+
+def write_standings(tmp_path, lines):
+    path = tmp_path / "standings.csv"
+    path.write_text(FJELSTUL_HEADER + "".join(f"{line}\n" for line in lines), encoding="utf-8")
+    return path
+
+
+def test_loader_maps_former_names_by_team_id(tmp_path):
+    path = write_standings(
+        tmp_path,
+        [
+            "1902,1,1,T-027,The Wednesday",
+            "1902,1,2,T-002,Aston Villa",
+            "1929,1,1,T-027,Sheffield Wednesday",
+            "1929,1,2,T-009,Preston North End",
+        ],
+    )
+    early = load_fjelstul_champions(path, EARLY_CLUBS)
+    assert early["1902"]["champion"] == {
+        "slug": "sheffield-wednesday",
+        "name": "Sheffield Wednesday FC",
+    }
+    assert early["1902"]["runner_up"] == {"slug": "aston-villa", "name": "Aston Villa FC"}
+    assert early["1929"]["champion"]["slug"] == "sheffield-wednesday"
+    assert early["1929"]["runner_up"] == {"slug": None, "name": "Preston North End"}
+
+
+def test_loader_keeps_only_top_two_of_the_top_flight_before_1992(tmp_path):
+    path = write_standings(
+        tmp_path,
+        [
+            "1902,1,1,T-027,The Wednesday",
+            "1902,1,2,T-002,Aston Villa",
+            "1902,1,3,T-009,Preston North End",
+            "1902,2,1,T-009,Preston North End",
+            "1992,1,1,T-002,Aston Villa",
+        ],
+    )
+    assert list(load_fjelstul_champions(path, EARLY_CLUBS)) == ["1902"]
+
+
+@pytest.mark.parametrize(
+    "lines",
+    [
+        ["1902,1,1,T-027,The Wednesday"],
+        [
+            "1902,1,1,T-027,The Wednesday",
+            "1902,1,1,T-002,Aston Villa",
+            "1902,1,2,T-009,Preston North End",
+        ],
+    ],
+)
+def test_loader_fails_without_exactly_one_champion_and_runner_up(tmp_path, lines):
+    with pytest.raises(ValueError, match="1902"):
+        load_fjelstul_champions(write_standings(tmp_path, lines), EARLY_CLUBS)

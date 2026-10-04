@@ -199,6 +199,29 @@ def load_fjelstul(path: Path, clubs: dict) -> dict:
     return dict(result)
 
 
+def load_fjelstul_champions(path: Path, clubs: dict) -> dict:
+    """Top-flight champions and runners-up before the Premier League, by Fjelstul team id."""
+    # The team id, not the name, so former names ("The Wednesday") count for the club.
+    by_id = {
+        club["fjelstul_team_id"]: slug
+        for slug, club in clubs.items()
+        if club.get("fjelstul_team_id")
+    }
+    found = defaultdict(lambda: {"1": [], "2": []})
+    with path.open(encoding="utf-8-sig", newline="") as handle:
+        for row in csv.DictReader(handle):
+            if row["tier"] == "1" and int(row["season"]) < 1992 and row["position"] in ("1", "2"):
+                slug = by_id.get(row["team_id"])
+                team = {"slug": slug, "name": clubs[slug]["name"] if slug else row["team_name"]}
+                found[row["season"]][row["position"]].append(team)
+    early = {}
+    for season, places in sorted(found.items()):
+        if len(places["1"]) != 1 or len(places["2"]) != 1:
+            raise ValueError(f"{season}: expected one champion and one runner-up")
+        early[season] = {"champion": places["1"][0], "runner_up": places["2"][0]}
+    return early
+
+
 def verify_table(matches: list[dict], reference: list[dict]) -> None:
     actual = {
         r["club_slug"]: r
