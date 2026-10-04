@@ -203,19 +203,21 @@ def test_ordinal(n, label):
     assert ordinal(n) == label
 
 
-def test_club_summary_sentences_in_english_and_thai():
+def test_club_summary_sentence_in_english_only():
+    # Thai text here outranked head-to-head documents for Thai questions (eval 2026-10-04).
     d = docs()
     arsenal = body(d["hist-club-arsenal"])
-    assert (
-        "Arsenal FC have won the Premier League title 2 times.\n"
-        "สรุปสถิติพรีเมียร์ลีกของ Arsenal FC: ได้แชมป์พรีเมียร์ลีก 2 สมัย รองแชมป์ 1 ครั้ง "
-        "อยู่พรีเมียร์ลีก 3 จาก 3 ฤดูกาล ตกชั้น 0 ครั้ง อันดับดีที่สุดอันดับ 1 "
-        "อันดับแย่ที่สุดอันดับ 2\nPremier League titles: 2"
-    ) in arsenal
+    assert "Arsenal FC have won the Premier League title 2 times.\nPremier League titles: 2" in (
+        arsenal
+    )
     assert "Chelsea FC have won the Premier League title once.\n" in body(d["hist-club-chelsea"])
-    everton = body(d["hist-club-everton"])
-    assert "Everton FC have never won the Premier League title.\n" in everton
-    assert "สรุปสถิติพรีเมียร์ลีกของ Everton FC: ไม่เคยได้แชมป์พรีเมียร์ลีก รองแชมป์ 1 ครั้ง" in everton
+    assert "Everton FC have never won the Premier League title.\n" in body(d["hist-club-everton"])
+    assert not any(
+        "฀" <= ch <= "๿"
+        for doc in d.values()
+        if doc["topic"] == "club_record"
+        for ch in doc["text"]
+    )
 
 
 def test_records_summary_sentences_in_english_and_thai():

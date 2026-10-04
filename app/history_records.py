@@ -62,19 +62,13 @@ def _club_document(slug, entries, clubs, coverage, span, total) -> dict:
     positions = [row["position"] for _, row, _ in entries]
     best, worst = min(positions), max(positions)
     best_count = positions.count(best)
-    # Plain sentences (English and Thai) so keyword search matches how fans ask.
+    # A plain sentence so keyword search matches how fans ask. English only: the router names
+    # the club in English, and Thai text here outranked head-to-head documents (eval 2026-10-04).
     times = {0: None, 1: "once"}.get(len(titles), f"{len(titles)} times")
     text = coverage + (
         f"{name} have won the Premier League title {times}.\n"
         if times
         else f"{name} have never won the Premier League title.\n"
-    )
-    text += (
-        f"สรุปสถิติพรีเมียร์ลีกของ {name}: "
-        + (f"ได้แชมป์พรีเมียร์ลีก {len(titles)} สมัย" if titles else "ไม่เคยได้แชมป์พรีเมียร์ลีก")
-        + f" รองแชมป์ {len(runners_up)} ครั้ง อยู่พรีเมียร์ลีก {len(entries)} จาก {total} ฤดูกาล"
-        + f" ตกชั้น {len(relegations)} ครั้ง อันดับดีที่สุดอันดับ {best}"
-        + f" อันดับแย่ที่สุดอันดับ {worst}\n"
     )
     text += (
         _counted("Premier League titles", titles)
