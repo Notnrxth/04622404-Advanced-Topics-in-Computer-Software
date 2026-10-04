@@ -6,6 +6,12 @@ from app.history import FIELDS, historical_document, relegated, season_label, ta
 
 FJELSTUL_URL = "https://github.com/jfjelstul/englishfootball"
 GROUP = 10  # rows per heading, sized for retrieval's heading-based chunker
+# The First Division began in 1892/93; Wikidata leaves the earlier champions out of it.
+FIRST_DIVISION_FROM = "1892"
+SINGLE_DIVISION_NOTE = (
+    "Before 1892/93 the Football League had a single division; its champions are counted "
+    "here as First Division champions."
+)
 
 
 def ordinal(n: int) -> str:
@@ -53,6 +59,8 @@ def make_record_documents(tables: dict, clubs: dict, early: dict | None = None) 
             ' Lines that say "all eras" also count First Division titles from '
             f"{season_label(min(early))} to {season_label(max(early))}."
         )
+        if min(early) < FIRST_DIVISION_FROM:
+            coverage += " " + SINGLE_DIVISION_NOTE
     coverage += "\n"
     history = defaultdict(list)  # slug -> [(season, row, relegated?)] in season order
     for season in seasons:
@@ -302,7 +310,9 @@ def _all_era_sections(early: dict, early_titles: dict, champions: Counter, clubs
             for k in ranked
         )
         + ".\n"
-        + f"{_subject(len(keys), 'different club')} been English top-flight champions.\n"
+        + f"{_subject(len(keys), 'different club')} been English top-flight champions."
+        + (f" {SINGLE_DIVISION_NOTE}" if min(early) < FIRST_DIVISION_FROM else "")
+        + "\n"
     )
     previous = None
     for group in _groups(sorted(early)):

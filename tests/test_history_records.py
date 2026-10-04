@@ -417,6 +417,32 @@ def test_all_era_leaders_list_every_tied_club():
     assert "in all eras? Arsenal FC, Everton FC (3).\n" in text
 
 
+# Wikidata counts First Division titles from 1892/93 only (Everton 8, Preston 0); before that
+# the Football League had a single division. The records count those champions, and say so.
+SINGLE_DIVISION_NOTE = (
+    "Before 1892/93 the Football League had a single division; its champions are counted "
+    "here as First Division champions."
+)
+
+
+def test_single_division_seasons_are_explained_when_present():
+    early = {"1888": early_entry(PRESTON, ("everton", None)), **EARLY}
+    d = early_docs(early)
+    assert body(d["hist-club-arsenal"]).startswith(
+        "Coverage: Premier League statistics are for 2000/01 to 2002/03. Lines that say "
+        '"all eras" also count First Division titles from 1888/89 to 1919/20. '
+        + SINGLE_DIVISION_NOTE
+        + "\n"
+    )
+    assert "5 different clubs have been English top-flight champions.\n" not in body(
+        d["hist-records"]
+    )
+    assert (
+        "4 different clubs have been English top-flight champions. " + SINGLE_DIVISION_NOTE + "\n"
+    ) in body(d["hist-records"])
+    assert SINGLE_DIVISION_NOTE not in "".join(doc["text"] for doc in early_docs().values())
+
+
 def test_without_early_there_is_no_all_era_text():
     for doc in make_record_documents(TABLES, CLUBS):
         assert "all eras" not in doc["text"]
