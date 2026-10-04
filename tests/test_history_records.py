@@ -333,26 +333,32 @@ def early_docs(early=EARLY):
     return {d["doc_id"]: d for d in make_record_documents(TABLES, CLUBS, early)}
 
 
-def test_coverage_names_both_eras_when_early_is_given():
+# Live chat test 2026-10-04: all-era lines in the first chunk made it long enough that its
+# Premier League facts (relegations, never won) stopped ranking. They have their own heading.
+def first_chunk(doc):
+    return body(doc).split("\n## ", 1)[0]
+
+
+def test_first_chunk_keeps_the_short_coverage_line():
     for doc in early_docs().values():
         assert (
-            body(doc).count(
-                "Coverage: Premier League statistics are for 2000/01 to 2002/03. Lines that say "
-                '"all eras" also count First Division titles from 1912/13 to 1919/20.\n'
-            )
+            body(doc).count("Coverage: Premier League statistics are for 2000/01 to 2002/03.\n")
             == 1
         )
+        assert "all eras" not in first_chunk(doc)
 
 
 def test_club_all_era_line_for_each_case():
     d = early_docs()
+    arsenal = body(d["hist-club-arsenal"])
     assert (
-        "How many Premier League titles have Arsenal FC won? 2 (2000/01, 2002/03).\n"
+        "## English top-flight league titles (all eras)\n"
         "How many English top-flight league titles have Arsenal FC won in all eras? "
         "3 (1 First Division, 2 Premier League).\n"
         "First Division titles before the Premier League: 1 (1914/15).\n"
-        "Arsenal FC have won the Premier League title 2 times.\n"
-    ) in body(d["hist-club-arsenal"])
+        "All eras count First Division titles from 1912/13 to 1919/20 and Premier League titles.\n"
+        "## Finishes by season"
+    ) in arsenal
     everton = body(d["hist-club-everton"])
     assert "won in all eras? 2 (2 First Division, 0 Premier League).\n" in everton
     assert "First Division titles before the Premier League: 2 (1913/14, 1919/20).\n" in everton
@@ -428,12 +434,11 @@ SINGLE_DIVISION_NOTE = (
 def test_single_division_seasons_are_explained_when_present():
     early = {"1888": early_entry(PRESTON, ("everton", None)), **EARLY}
     d = early_docs(early)
-    assert body(d["hist-club-arsenal"]).startswith(
-        "Coverage: Premier League statistics are for 2000/01 to 2002/03. Lines that say "
-        '"all eras" also count First Division titles from 1888/89 to 1919/20. '
-        + SINGLE_DIVISION_NOTE
-        + "\n"
-    )
+    assert (
+        "All eras count First Division titles from 1888/89 to 1919/20 and Premier League "
+        "titles. " + SINGLE_DIVISION_NOTE + "\n"
+    ) in body(d["hist-club-arsenal"])
+    assert SINGLE_DIVISION_NOTE not in first_chunk(d["hist-club-arsenal"])
     assert "5 different clubs have been English top-flight champions.\n" not in body(
         d["hist-records"]
     )
@@ -441,6 +446,27 @@ def test_single_division_seasons_are_explained_when_present():
         "4 different clubs have been English top-flight champions. " + SINGLE_DIVISION_NOTE + "\n"
     ) in body(d["hist-records"])
     assert SINGLE_DIVISION_NOTE not in "".join(doc["text"] for doc in early_docs().values())
+
+
+# Live chat test 2026-10-04: "แชมป์ปี 2025" found nothing; a calendar year spans two seasons.
+def test_records_answer_the_champion_of_a_calendar_year():
+    text = body(docs()["hist-records"])
+    assert (
+        "## Premier League champions by year 2000–2003\n"
+        "Who won the Premier League in 2000? 2000/01 (began in 2000): Arsenal FC.\n"
+        "Who won the Premier League in 2001? 2000/01 (ended in 2001): Arsenal FC · "
+        "2001/02 (began in 2001): Chelsea FC.\n"
+        "Who won the Premier League in 2002? 2001/02 (ended in 2002): Chelsea FC · "
+        "2002/03 (began in 2002): Arsenal FC.\n"
+        "Who won the Premier League in 2003? 2002/03 (ended in 2003): Arsenal FC.\n"
+    ) in text
+
+
+def test_champions_by_year_split_into_groups(monkeypatch):
+    monkeypatch.setattr(history_records, "GROUP", 3)
+    text = body(docs()["hist-records"])
+    assert "## Premier League champions by year 2000–2002\n" in text
+    assert "## Premier League champions by year 2003–2003\n" in text
 
 
 def test_without_early_there_is_no_all_era_text():
