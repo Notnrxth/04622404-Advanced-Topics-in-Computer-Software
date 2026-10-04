@@ -5,6 +5,7 @@ import json
 import re
 from collections import defaultdict
 from datetime import date
+from functools import partial
 from pathlib import Path
 
 SCORER_REFERENCE_PATH = Path(__file__).parents[1] / "data/scorer_reference.json"
@@ -227,6 +228,44 @@ CREDIT = (
 )
 
 
+def season_label(season: str) -> str:
+    return f"{season}/{str(int(season) + 1)[2:]}"
+
+
+def relegated(season: str, rows: list[dict]) -> list[dict]:
+    # 1994/95 relegated four clubs during the reduction from 22 to 20.
+    ordered = sorted(rows, key=lambda row: row["position"])
+    return ordered[-(4 if season == "1994" else 3) :]
+
+
+def table_stats(row: dict) -> str:
+    return (
+        f"P{row['played']} W{row['wins']} D{row['draws']} L{row['losses']} "
+        f"GF{row['goals_for']} GA{row['goals_against']} "
+        f"GD{row['goal_difference']:+} Pts{row['points']}"
+        + (f"; point adjustment {row['point_adjustment']}" if row.get("point_adjustment") else "")
+    )
+
+
+def historical_document(clubs, doc_id, title, text, topic, season, slugs, origin, url) -> dict:
+    return {
+        "doc_id": doc_id,
+        "title": title,
+        "text": text + "\n## Sources and license\n" + CREDIT,
+        "category": "historical",
+        "origin": origin,
+        "topic": topic,
+        "season": season,
+        "matchweek": None,
+        "team_ids": sorted(
+            {clubs[s]["team_id"] for s in slugs if clubs[s]["team_id"] is not None}
+        ),
+        "date": None,
+        "fetched_at": None,
+        "url": url,
+    }
+
+
 def make_documents(
     seasons: dict,
     tables: dict,
@@ -235,37 +274,12 @@ def make_documents(
     scorers: dict | None = None,
 ) -> list[dict]:
     documents, pairs = [], defaultdict(list)
-
-    def doc(doc_id, title, text, topic, season, slugs, origin, url):
-        return {
-            "doc_id": doc_id,
-            "title": title,
-            "text": text + "\n## Sources and license\n" + CREDIT,
-            "category": "historical",
-            "origin": origin,
-            "topic": topic,
-            "season": season,
-            "matchweek": None,
-            "team_ids": sorted(
-                {clubs[s]["team_id"] for s in slugs if clubs[s]["team_id"] is not None}
-            ),
-            "date": None,
-            "fetched_at": None,
-            "url": url,
-        }
+    doc = partial(historical_document, clubs)
 
     def result(m):
         return (
             f"{m['date']} MW{m['matchweek']}: {clubs[m['home']]['name']} "
             f"{m['home_goals']}-{m['away_goals']} {clubs[m['away']]['name']}"
-        )
-
-    def stats(row):
-        return (
-            f"P{row['played']} W{row['wins']} D{row['draws']} L{row['losses']} "
-            f"GF{row['goals_for']} GA{row['goals_against']} "
-            f"GD{row['goal_difference']:+} Pts{row['points']}"
-            + (f"; point adjustment {row['point_adjustment']}" if row["point_adjustment"] else "")
         )
 
     for season, matches in sorted(seasons.items()):
@@ -275,14 +289,13 @@ def make_documents(
             f"Champions: {clubs[rows[0]['club_slug']]['name']}, {rows[0]['points']} points. "
             f"Runners-up: {clubs[rows[1]['club_slug']]['name']}, {rows[1]['points']} points.\n"
         )
-        # 1994/95 relegated four clubs during the reduction from 22 to 20.
-        relegated = rows[-(4 if season == "1994" else 3) :]
-        text += "Relegated: " + ", ".join(clubs[r["club_slug"]]["name"] for r in relegated) + ".\n"
+        down = relegated(season, rows)
+        text += "Relegated: " + ", ".join(clubs[r["club_slug"]]["name"] for r in down) + ".\n"
         for offset in range(0, len(rows), 5):
             text += f"## Table: positions {offset + 1}-{min(offset + 5, len(rows))}\n"
             text += (
                 "\n".join(
-                    f"{r['position']}. {clubs[r['club_slug']]['name']}: {stats(r)}"
+                    f"{r['position']}. {clubs[r['club_slug']]['name']}: {table_stats(r)}"
                     for r in rows[offset : offset + 5]
                 )
                 + "\n"
@@ -322,11 +335,11 @@ def make_documents(
                 [m for m in matches if slug in (m["home"], m["away"])], key=lambda m: m["date"]
             )
             title = f"{clubs[slug]['name']} — Premier League {season}/{str(int(season) + 1)[2:]}"
-            text = f"Final position: {row['position']}. {stats(row)}.\n## Home and away\n"
+            text = f"Final position: {row['position']}. {table_stats(row)}.\n## Home and away\n"
             for side in ("home", "away"):
                 side_rows = calculate_table([m for m in own if m[side] == slug])
                 side_row = next(r for r in side_rows if r["club_slug"] == slug)
-                text += f"{side.title()}: {stats(side_row)}.\n"
+                text += f"{side.title()}: {table_stats(side_row)}.\n"
             # Keep results sections short enough for retrieval's heading-based chunker.
             for offset in range(0, len(own), 5):
                 text += f"## Results {offset + 1}-{min(offset + 5, len(own))}\n"
