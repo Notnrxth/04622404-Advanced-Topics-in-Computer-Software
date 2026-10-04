@@ -141,7 +141,21 @@ def test_all_pinned_seasons_and_all_team_aliases():
     assert sum(map(len, seasons.values())) == 13166
     assert len(clubs) == 51
     assert sum(map(len, tables.values())) == 686
-    assert len(docs) == 1661
+    assert len(docs) == 1713
+    topics = {t: sum(d["topic"] == t for d in docs) for t in ("club_record", "league_records")}
+    assert topics == {"club_record": 51, "league_records": 1}
+    records = next(d for d in docs if d["doc_id"] == "hist-records")["text"]
+    # Cross-checked against Wikidata (P1346 winners of Q9448 seasons) on 2026-10-04.
+    assert (
+        "Manchester United FC 13 · Manchester City FC 8 · Chelsea FC 5 · Arsenal FC 4 · "
+        "Liverpool FC 2 · Blackburn Rovers FC 1 · Leicester City FC 1.\n"
+    ) in records
+    assert "7 different clubs have won the Premier League.\n" in records
+    united = next(d for d in docs if d["doc_id"] == "hist-club-manchester-united")["text"]
+    assert "Premier League titles: 13 (" in united
+    assert "Seasons in the Premier League: 34 of 34. Relegations: 0.\n" in united
+    spurs = next(d for d in docs if d["doc_id"] == "hist-club-tottenham")["text"]
+    assert "Premier League titles: 0 (never won the Premier League).\n" in spurs
     from app.history import season_scorers
 
     assert [p["goals"] for p in season_scorers(seasons["2025"])[:3]] == [27, 22, 17]

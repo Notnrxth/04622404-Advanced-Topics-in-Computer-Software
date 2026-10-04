@@ -4,7 +4,7 @@
 
 Prepared 34 completed seasons (1992/93–2025/26), 13,166 matches, 51 clubs and 686 team-season tables. All 95 openfootball name variants resolve explicitly. Unknown names fail instead of being skipped.
 
-The English document bundle contains 1,661 stable IDs: 34 season tables, 686 team-season summaries and 941 head-to-head summaries. Full results stay in football.historical_matches; tables in football.historical_standings. SQLite history_local.db is used locally and remains separate from current-season DB/index.
+The English document bundle contains 1,713 stable IDs: 34 season tables, 686 team-season summaries, 941 head-to-head summaries, 51 club records (`hist-club-<slug>`) and one league honours and all-time records document (`hist-records`). Club records and league records are computed from the final tables, cover the Premier League era only and say so in a Coverage line. Full results stay in football.historical_matches; tables in football.historical_standings. SQLite history_local.db is used locally and remains separate from current-season DB/index.
 
 Mapping football-data.org team IDs is conservative: 20 identities verified against the current provider response; other clubs have null until verified. Fjelstul identities are resolved through its teams.csv and included in the generated clubs.json. Slugs do not depend on provider IDs.
 
@@ -40,7 +40,7 @@ Local review update: current-season standings now use one stable `standings-<sea
 
 docs/05_RETRIEVAL_DESIGN.md §10 in develop is a proposal requiring a CONTRACT agreement. This branch does not modify peers' 05, 03 or web modules.
 
-Historical metadata uses category=historical, origin=openfootball|fjelstul, topic=season_table|team_season|head_to_head. Historical fetched_at/date/matchweek are null; h2h season is null. The existing 05 currently rejects the new category/origin/IDs.
+Historical metadata uses category=historical, origin=openfootball|fjelstul, topic=season_table|team_season|head_to_head|club_record|league_records. Club and league records use origin=fjelstul and season=null. Historical fetched_at/date/matchweek are null; h2h season is null. The existing 05 currently rejects the new category/origin/IDs.
 
 Therefore --index is disabled unless HISTORICAL_INDEX_ENABLED=true is explicitly configured **after** agreement and 05 support. Worker also refuses historical writes while disabled. Once supported, --index queues durable outbox tasks in the selected DB and reconciles in batches of at most 50 documents, each bounded by UTF-8 body size.
 

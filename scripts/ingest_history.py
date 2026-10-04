@@ -31,6 +31,7 @@ from app.history import (
     resolve,
     verify_table,
 )
+from app.history_records import make_record_documents
 from app.service import FootballService
 from scripts.download_history import main as download
 from scripts.env_file import repo_env_file
@@ -90,6 +91,7 @@ def build_dataset():
     }
     scorers, _validation = load_scorer_sources(raw, clubs, seasons, source_urls)
     documents = make_documents(seasons, tables, clubs, source_urls, scorers)
+    documents += make_record_documents(tables, clubs)
     if len({d["doc_id"] for d in documents}) != len(documents):
         raise ValueError("Duplicate historical document ID")
     return seasons, tables, clubs, documents
@@ -163,7 +165,13 @@ async def main(args):
         "documents": len(documents),
         "by_topic": {
             topic: sum(d["topic"] == topic for d in documents)
-            for topic in ("season_table", "team_season", "head_to_head")
+            for topic in (
+                "season_table",
+                "team_season",
+                "head_to_head",
+                "club_record",
+                "league_records",
+            )
         },
         "source_commits": PINNED,
         "scorer_validation": {year: row["status"] for year, row in validation.items()},
