@@ -24,6 +24,7 @@ from app.football import current_season
 from app.history import (
     calculate_table,
     load_fjelstul,
+    load_fjelstul_champions,
     load_scorer_sources,
     make_documents,
     normalize,
@@ -91,7 +92,10 @@ def build_dataset():
     }
     scorers, _validation = load_scorer_sources(raw, clubs, seasons, source_urls)
     documents = make_documents(seasons, tables, clubs, source_urls, scorers)
-    documents += make_record_documents(tables, clubs)
+    early = load_fjelstul_champions(raw / "fjelstul/standings.csv", clubs)
+    if len(early) != 93:
+        raise ValueError("Expected 93 First Division seasons before 1992")
+    documents += make_record_documents(tables, clubs, early)
     if len({d["doc_id"] for d in documents}) != len(documents):
         raise ValueError("Duplicate historical document ID")
     return seasons, tables, clubs, documents

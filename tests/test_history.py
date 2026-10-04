@@ -163,6 +163,26 @@ def test_all_pinned_seasons_and_all_team_aliases():
     assert "Seasons in the Premier League: 34 of 34. Relegations: 0.\n" in united
     spurs = next(d for d in docs if d["doc_id"] == "hist-club-tottenham")["text"]
     assert "Premier League titles: 0 (never won the Premier League).\n" in spurs
+    # All eras: Fjelstul matches Wikidata (2026-10-04) for every club from 1892/93; Wikidata
+    # leaves out the single-division seasons 1888/89-1891/92 (Everton 1890/91, Sunderland
+    # 1891/92, Preston 1888/89 and 1889/90), which the records count and explain.
+    by_id = {d["doc_id"]: d["text"] for d in docs}
+    for slug, line in {
+        "liverpool": "20 (18 First Division, 2 Premier League)",
+        "manchester-united": "20 (7 First Division, 13 Premier League)",
+        "arsenal": "14 (10 First Division, 4 Premier League)",
+        "everton": "9 (9 First Division, 0 Premier League)",
+        "chelsea": "6 (1 First Division, 5 Premier League)",
+        "sheffield-wednesday": "4 (4 First Division, 0 Premier League)",
+    }.items():
+        assert f"won in all eras? {line}.\n" in by_id[f"hist-club-{slug}"], slug
+    all_eras = by_id["hist-records"]
+    assert "in all eras? Liverpool FC, Manchester United FC (20).\n" in all_eras
+    assert "Preston North End 2 (2 First Division + 0 Premier League)" in all_eras
+    assert "24 different clubs have been English top-flight champions. Before 1892/93" in all_eras
+    assert "1888/89: Preston North End (runners-up Aston Villa FC)\n" in all_eras
+    assert "1989/90: Liverpool FC (runners-up Aston Villa FC)\n" in all_eras
+    assert "No First Division football 1939/40–1945/46 (Second World War).\n" in all_eras
     from app.history import season_scorers
 
     assert [p["goals"] for p in season_scorers(seasons["2025"])[:3]] == [27, 22, 17]
