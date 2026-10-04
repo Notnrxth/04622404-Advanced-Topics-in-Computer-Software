@@ -57,17 +57,33 @@ def make_record_documents(tables: dict, clubs: dict) -> list[dict]:
 def _club_document(slug, entries, clubs, coverage, span, total) -> dict:
     name = clubs[slug]["name"]
     titles = [s for s, row, _ in entries if row["position"] == 1]
+    runners_up = [s for s, row, _ in entries if row["position"] == 2]
+    relegations = [s for s, _, down in entries if down]
     positions = [row["position"] for _, row, _ in entries]
     best, worst = min(positions), max(positions)
     best_count = positions.count(best)
+    # Plain sentences (English and Thai) so keyword search matches how fans ask.
+    times = {0: None, 1: "once"}.get(len(titles), f"{len(titles)} times")
     text = coverage + (
+        f"{name} have won the Premier League title {times}.\n"
+        if times
+        else f"{name} have never won the Premier League title.\n"
+    )
+    text += (
+        f"สรุปสถิติพรีเมียร์ลีกของ {name}: "
+        + (f"ได้แชมป์พรีเมียร์ลีก {len(titles)} สมัย" if titles else "ไม่เคยได้แชมป์พรีเมียร์ลีก")
+        + f" รองแชมป์ {len(runners_up)} ครั้ง อยู่พรีเมียร์ลีก {len(entries)} จาก {total} ฤดูกาล"
+        + f" ตกชั้น {len(relegations)} ครั้ง อันดับดีที่สุดอันดับ {best}"
+        + f" อันดับแย่ที่สุดอันดับ {worst}\n"
+    )
+    text += (
         _counted("Premier League titles", titles)
         if titles
         else "Premier League titles: 0 (never won the Premier League)."
     )
-    text += "\n" + _counted("Runners-up", [s for s, row, _ in entries if row["position"] == 2])
+    text += "\n" + _counted("Runners-up", runners_up)
     text += f"\nSeasons in the Premier League: {len(entries)} of {total}. "
-    text += _counted("Relegations", [s for s, _, down in entries if down])
+    text += _counted("Relegations", relegations)
     text += (
         f"\nBest finish: {ordinal(best)} ({best_count} time{'s' if best_count != 1 else ''}). "
         f"Worst finish: {ordinal(worst)} "
@@ -110,7 +126,14 @@ def _records_document(seasons, tables, history, clubs, coverage, span) -> dict:
 
     champions = Counter(at(s, 1) for s in seasons)
     ranked = sorted(champions.items(), key=lambda item: (-item[1], name(item[0])))
+    most = ranked[0][1]
+    leaders = ", ".join(name(slug) for slug, count in ranked if count == most)
     text = coverage + "## Titles by club\n"
+    text += f"Most Premier League titles: {leaders} ({most}).\n"
+    text += (
+        f"ทีมที่ได้แชมป์พรีเมียร์ลีกมากที่สุดคือ {leaders} ({most} สมัย) "
+        f"มีทั้งหมด {len(champions)} ทีมที่เคยได้แชมป์พรีเมียร์ลีก\n"
+    )
     text += " · ".join(f"{name(slug)} {count}" for slug, count in ranked) + ".\n"
     text += f"{_subject(len(champions), 'different club')} won the Premier League.\n"
     for group in _groups(seasons):
@@ -120,11 +143,13 @@ def _records_document(seasons, tables, history, clubs, coverage, span) -> dict:
         )
     ever = sorted((s for s, e in history.items() if len(e) == len(seasons)), key=name)
     text += "## Ever-present clubs\n" + (
+        f"มี {len(ever)} ทีมที่อยู่พรีเมียร์ลีกครบทุกฤดูกาล ({len(seasons)} ฤดูกาล) และไม่เคยตกชั้น\n"
         f"{_subject(len(ever), 'club')} played in all {len(seasons)} Premier League seasons: "
         + ", ".join(name(s) for s in ever)
         + ".\n"
         if ever
-        else f"No club has played in all {len(seasons)} Premier League seasons.\n"
+        else "ไม่มีทีมใดอยู่พรีเมียร์ลีกครบทุกฤดูกาล\n"
+        f"No club has played in all {len(seasons)} Premier League seasons.\n"
     )
     totals = {slug: _totals([row for _, row, _ in e]) for slug, e in history.items()}
     order = sorted(
@@ -139,6 +164,11 @@ def _records_document(seasons, tables, history, clubs, coverage, span) -> dict:
     for index, group in enumerate(_groups(order)):
         start = index * GROUP + 1
         text += f"## All-time table: positions {start}-{start + len(group) - 1}\n"
+        if index == 0:
+            text += (
+                "ตารางคะแนนรวมตลอดกาลของพรีเมียร์ลีก ทีมที่เก็บแต้มรวมมากที่สุดคือ "
+                f"{name(order[0])} ({totals[order[0]]['points']} แต้ม)\n"
+            )
         text += "".join(
             f"{start + i}. {name(s)}: {table_stats(totals[s])}\n" for i, s in enumerate(group)
         )

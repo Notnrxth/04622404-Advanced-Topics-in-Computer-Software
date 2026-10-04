@@ -139,7 +139,7 @@ def test_finishes_split_into_groups(monkeypatch):
 
 def test_records_titles_champions_and_ever_present():
     text = body(docs()["hist-records"])
-    assert "## Titles by club\nArsenal FC 2 · Chelsea FC 1.\n" in text
+    assert "Arsenal FC 2 · Chelsea FC 1.\n" in text
     assert "2 different clubs have won the Premier League.\n" in text
     assert (
         "## Champions and runners-up 2000/01–2002/03\n"
@@ -148,14 +148,16 @@ def test_records_titles_champions_and_ever_present():
         "2002/03: Arsenal FC (runners-up Everton FC)\n"
     ) in text
     assert (
-        "## Ever-present clubs\n3 clubs have played in all 3 Premier League seasons: "
+        "## Ever-present clubs\nมี 3 ทีมที่อยู่พรีเมียร์ลีกครบทุกฤดูกาล (3 ฤดูกาล) และไม่เคยตกชั้น\n"
+        "3 clubs have played in all 3 Premier League seasons: "
         "Arsenal FC, Chelsea FC, Everton FC.\n"
     ) in text
 
 
 def test_records_all_time_table_breaks_ties_by_gd_gf_then_name():
     table_text = body(docs()["hist-records"]).split("## All-time table: positions 1-9\n", 1)[1]
-    names = [line.split(". ", 1)[1].split(":", 1)[0] for line in table_text.splitlines()]
+    rows = [line for line in table_text.splitlines() if line[:1].isdigit()]
+    names = [line.split(". ", 1)[1].split(":", 1)[0] for line in rows]
     assert names == [
         "Arsenal FC",
         "Chelsea FC",
@@ -167,7 +169,10 @@ def test_records_all_time_table_breaks_ties_by_gd_gf_then_name():
         "Derby County FC",
         "Wimbledon FC",
     ]
-    assert table_text.startswith("1. Arsenal FC: P15 W14 D0 L1 GF26 GA4 GD+22 Pts42\n")
+    assert table_text.startswith(
+        "ตารางคะแนนรวมตลอดกาลของพรีเมียร์ลีก ทีมที่เก็บแต้มรวมมากที่สุดคือ Arsenal FC (42 แต้ม)\n"
+        "1. Arsenal FC: P15 W14 D0 L1 GF26 GA4 GD+22 Pts42\n"
+    )
 
 
 def test_records_grammar_for_a_single_club():
@@ -196,3 +201,38 @@ def test_records_grammar_for_a_single_club():
 )
 def test_ordinal(n, label):
     assert ordinal(n) == label
+
+
+def test_club_summary_sentences_in_english_and_thai():
+    d = docs()
+    arsenal = body(d["hist-club-arsenal"])
+    assert (
+        "Arsenal FC have won the Premier League title 2 times.\n"
+        "สรุปสถิติพรีเมียร์ลีกของ Arsenal FC: ได้แชมป์พรีเมียร์ลีก 2 สมัย รองแชมป์ 1 ครั้ง "
+        "อยู่พรีเมียร์ลีก 3 จาก 3 ฤดูกาล ตกชั้น 0 ครั้ง อันดับดีที่สุดอันดับ 1 "
+        "อันดับแย่ที่สุดอันดับ 2\nPremier League titles: 2"
+    ) in arsenal
+    assert "Chelsea FC have won the Premier League title once.\n" in body(d["hist-club-chelsea"])
+    everton = body(d["hist-club-everton"])
+    assert "Everton FC have never won the Premier League title.\n" in everton
+    assert "สรุปสถิติพรีเมียร์ลีกของ Everton FC: ไม่เคยได้แชมป์พรีเมียร์ลีก รองแชมป์ 1 ครั้ง" in everton
+
+
+def test_records_summary_sentences_in_english_and_thai():
+    text = body(docs()["hist-records"])
+    assert (
+        "## Titles by club\nMost Premier League titles: Arsenal FC (2).\n"
+        "ทีมที่ได้แชมป์พรีเมียร์ลีกมากที่สุดคือ Arsenal FC (2 สมัย) "
+        "มีทั้งหมด 2 ทีมที่เคยได้แชมป์พรีเมียร์ลีก\nArsenal FC 2 · Chelsea FC 1.\n"
+    ) in text
+
+
+def test_records_summary_lists_every_club_tied_on_most_titles():
+    tables = {
+        "2000": table(["arsenal", "everton", "leeds-united", "fulham"]),
+        "2001": table(["chelsea", "wimbledon", "derby-county", "bolton-wanderers"]),
+    }
+    text = body(make_record_documents(tables, CLUBS)[-1])
+    assert "Most Premier League titles: Arsenal FC, Chelsea FC (1).\n" in text
+    assert "ทีมที่ได้แชมป์พรีเมียร์ลีกมากที่สุดคือ Arsenal FC, Chelsea FC (1 สมัย)" in text
+    assert "## Ever-present clubs\nไม่มีทีมใดอยู่พรีเมียร์ลีกครบทุกฤดูกาล\n" in text
