@@ -86,10 +86,7 @@ def test_metadata_and_license_follow_the_archive():
         assert doc["url"] == "https://github.com/jfjelstul/englishfootball"
         assert doc["season"] is doc["matchweek"] is doc["date"] is doc["fetched_at"] is None
         assert "Joshua C. Fjelstul, Ph.D." in doc["text"]
-        coverage = (
-            "Coverage: Premier League seasons 2000/01 to 2002/03 only. Top-flight league titles "
-            "won before the Premier League began in 1992 (First Division) are not included.\n"
-        )
+        coverage = "Coverage: Premier League statistics are for 2000/01 to 2002/03.\n"
         # The records document has no chunk of its own for the coverage line alone.
         first = "## Titles by club\n" if doc["topic"] == "league_records" else ""
         assert body(doc).startswith(first + coverage)
@@ -224,7 +221,7 @@ def test_club_summary_sentence_in_english_only():
 def test_records_summary_sentences_in_english_and_thai():
     text = body(docs()["hist-records"])
     assert (
-        "(First Division) are not included.\nMost Premier League titles: Arsenal FC (2).\n"
+        "2000/01 to 2002/03.\nMost Premier League titles: Arsenal FC (2).\n"
         "ทีมที่ได้แชมป์พรีเมียร์ลีกมากที่สุดคือ Arsenal FC (2 สมัย) "
         "มีทั้งหมด 2 ทีมที่เคยได้แชมป์พรีเมียร์ลีก\nArsenal FC 2 · Chelsea FC 1.\n"
     ) in text
@@ -306,11 +303,121 @@ def test_records_without_an_unbeaten_season_say_so():
 def test_club_record_opens_with_the_question_people_ask():
     d = docs()
     assert body(d["hist-club-arsenal"]).startswith(
-        "Coverage: Premier League seasons 2000/01 to 2002/03 only. Top-flight league titles "
-        "won before the Premier League began in 1992 (First Division) are not included.\n"
+        "Coverage: Premier League statistics are for 2000/01 to 2002/03.\n"
         "How many Premier League titles have Arsenal FC won? 2 (2000/01, 2002/03).\n"
         "Arsenal FC have won the Premier League title 2 times.\n"
     )
     assert "How many Premier League titles have Everton FC won? None.\n" in body(
         d["hist-club-everton"]
     )
+
+
+def early_entry(champion, runner_up):
+    def team(t):
+        slug, name = t
+        return {"slug": slug, "name": CLUBS[slug]["name"] if slug else name}
+
+    return {"champion": team(champion), "runner_up": team(runner_up)}
+
+
+PRESTON = (None, "Preston North End")
+EARLY = {
+    "1912": early_entry(PRESTON, ("everton", None)),
+    "1913": early_entry(("everton", None), ("arsenal", None)),
+    "1914": early_entry(("arsenal", None), ("chelsea", None)),
+    "1919": early_entry(("everton", None), PRESTON),
+}
+
+
+def early_docs(early=EARLY):
+    return {d["doc_id"]: d for d in make_record_documents(TABLES, CLUBS, early)}
+
+
+def test_coverage_names_both_eras_when_early_is_given():
+    for doc in early_docs().values():
+        assert (
+            body(doc).count(
+                "Coverage: Premier League statistics are for 2000/01 to 2002/03. Lines that say "
+                '"all eras" also count First Division titles from 1912/13 to 1919/20.\n'
+            )
+            == 1
+        )
+
+
+def test_club_all_era_line_for_each_case():
+    d = early_docs()
+    assert (
+        "How many Premier League titles have Arsenal FC won? 2 (2000/01, 2002/03).\n"
+        "How many English top-flight league titles have Arsenal FC won in all eras? "
+        "3 (1 First Division, 2 Premier League).\n"
+        "First Division titles before the Premier League: 1 (1914/15).\n"
+        "Arsenal FC have won the Premier League title 2 times.\n"
+    ) in body(d["hist-club-arsenal"])
+    everton = body(d["hist-club-everton"])
+    assert "won in all eras? 2 (2 First Division, 0 Premier League).\n" in everton
+    assert "First Division titles before the Premier League: 2 (1913/14, 1919/20).\n" in everton
+    chelsea = body(d["hist-club-chelsea"])
+    assert "won in all eras? 1 (0 First Division, 1 Premier League).\n" in chelsea
+    assert "First Division titles before" not in chelsea
+    leeds = body(d["hist-club-leeds-united"])
+    assert (
+        "How many English top-flight league titles have Leeds United FC won in all eras? None.\n"
+        in leeds
+    )
+    assert "First Division titles before" not in leeds
+
+
+def test_records_all_era_sections():
+    text = body(early_docs()["hist-records"])
+    assert (
+        "## Record: most English top-flight league titles (all eras)\n"
+        "Which club has won the most English top-flight league titles in all eras? "
+        "Arsenal FC (3).\n"
+        "## English top-flight league titles by club (all eras)\n"
+        "Arsenal FC 3 (1 First Division + 2 Premier League) · "
+        "Everton FC 2 (2 First Division + 0 Premier League) · "
+        "Chelsea FC 1 (0 First Division + 1 Premier League) · "
+        "Preston North End 1 (1 First Division + 0 Premier League).\n"
+        "4 different clubs have been English top-flight champions.\n"
+        "## First Division champions and runners-up 1912/13–1919/20\n"
+        "1912/13: Preston North End (runners-up Everton FC)\n"
+        "1913/14: Everton FC (runners-up Arsenal FC)\n"
+        "1914/15: Arsenal FC (runners-up Chelsea FC)\n"
+    ) in text
+    assert text.index("## Record: unbeaten") < text.index("## Record: most English top-flight")
+    assert text.index("## First Division champions") < text.index("## Champions and runners-up")
+
+
+def test_first_division_section_marks_the_war_gap():
+    text = body(early_docs()["hist-records"])
+    assert (
+        "1914/15: Arsenal FC (runners-up Chelsea FC)\n"
+        "No First Division football 1915/16–1918/19 (First World War).\n"
+        "1919/20: Everton FC (runners-up Preston North End)\n"
+    ) in text
+    late = {
+        "1938": early_entry(("arsenal", None), ("everton", None)),
+        "1946": early_entry(("everton", None), ("arsenal", None)),
+    }
+    assert "No First Division football 1939/40–1945/46 (Second World War).\n" in body(
+        make_record_documents(TABLES, CLUBS, late)[-1]
+    )
+
+
+def test_first_division_section_splits_into_groups(monkeypatch):
+    monkeypatch.setattr(history_records, "GROUP", 2)
+    text = body(early_docs()["hist-records"])
+    assert "## First Division champions and runners-up 1912/13–1913/14\n" in text
+    assert "## First Division champions and runners-up 1914/15–1919/20\n" in text
+
+
+def test_all_era_leaders_list_every_tied_club():
+    early = {**EARLY, "1920": early_entry(("everton", None), ("arsenal", None))}
+    text = body(early_docs(early)["hist-records"])
+    assert "in all eras? Arsenal FC, Everton FC (3).\n" in text
+
+
+def test_without_early_there_is_no_all_era_text():
+    for doc in make_record_documents(TABLES, CLUBS):
+        assert "all eras" not in doc["text"]
+        assert "First Division champions" not in doc["text"]

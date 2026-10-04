@@ -43,28 +43,46 @@ def _groups(items: list) -> list[list]:
     return [items[offset : offset + GROUP] for offset in range(0, len(items), GROUP)]
 
 
-def make_record_documents(tables: dict, clubs: dict) -> list[dict]:
+def make_record_documents(tables: dict, clubs: dict, early: dict | None = None) -> list[dict]:
     seasons = sorted(tables)
     first, last = season_label(seasons[0]), season_label(seasons[-1])
     span = f"{first}–{last}"
-    coverage = (
-        f"Coverage: Premier League seasons {first} to {last} only. Top-flight league titles "
-        "won before the Premier League began in 1992 (First Division) are not included.\n"
-    )
+    coverage = f"Coverage: Premier League statistics are for {first} to {last}."
+    if early:
+        coverage += (
+            ' Lines that say "all eras" also count First Division titles from '
+            f"{season_label(min(early))} to {season_label(max(early))}."
+        )
+    coverage += "\n"
     history = defaultdict(list)  # slug -> [(season, row, relegated?)] in season order
     for season in seasons:
         down = {row["club_slug"] for row in relegated(season, tables[season])}
         for row in sorted(tables[season], key=lambda r: r["position"]):
             history[row["club_slug"]].append((season, row, row["club_slug"] in down))
+    # First Division titles by club; a club that never reached the Premier League keys by name.
+    early_titles = defaultdict(list)
+    for season, places in sorted((early or {}).items()):
+        team = places["champion"]
+        early_titles[team["slug"] or team["name"]].append(season)
     documents = [
-        _club_document(slug, history[slug], clubs, coverage, span, len(seasons))
+        _club_document(
+            slug,
+            history[slug],
+            clubs,
+            coverage,
+            span,
+            len(seasons),
+            early_titles.get(slug, []) if early else None,
+        )
         for slug in sorted(history)
     ]
-    documents.append(_records_document(seasons, tables, history, clubs, coverage, span))
+    documents.append(
+        _records_document(seasons, tables, history, clubs, coverage, span, early, early_titles)
+    )
     return documents
 
 
-def _club_document(slug, entries, clubs, coverage, span, total) -> dict:
+def _club_document(slug, entries, clubs, coverage, span, total, early_titles) -> dict:
     name = clubs[slug]["name"]
     titles = [s for s, row, _ in entries if row["position"] == 1]
     runners_up = [s for s, row, _ in entries if row["position"] == 2]
@@ -81,6 +99,18 @@ def _club_document(slug, entries, clubs, coverage, span, total) -> dict:
         + f"How many Premier League titles have {name} won? "
         + (f"{len(titles)} ({_labels(titles)}).\n" if titles else "None.\n")
     )
+    if early_titles is not None:
+        all_eras = len(early_titles) + len(titles)
+        text += f"How many English top-flight league titles have {name} won in all eras? " + (
+            f"{all_eras} ({len(early_titles)} First Division, {len(titles)} Premier League).\n"
+            if all_eras
+            else "None.\n"
+        )
+        if early_titles:
+            text += (
+                "First Division titles before the Premier League: "
+                f"{len(early_titles)} ({_labels(early_titles)}).\n"
+            )
     text += (
         f"{name} have won the Premier League title {_times(len(titles))}.\n"
         if titles
@@ -141,7 +171,7 @@ def _club_document(slug, entries, clubs, coverage, span, total) -> dict:
     )
 
 
-def _records_document(seasons, tables, history, clubs, coverage, span) -> dict:
+def _records_document(seasons, tables, history, clubs, coverage, span, early, early_titles) -> dict:
     def name(slug):
         return clubs[slug]["name"]
 
@@ -195,6 +225,8 @@ def _records_document(seasons, tables, history, clubs, coverage, span) -> dict:
         + (", ".join(unbeaten) if unbeaten else "None")
         + ".\n"
     )
+    if early:
+        text += _all_era_sections(early, early_titles, champions, clubs)
     for group in _groups(seasons):
         text += f"## Champions and runners-up {season_label(group[0])}–{season_label(group[-1])}\n"
         text += "".join(
@@ -245,3 +277,51 @@ def _records_document(seasons, tables, history, clubs, coverage, span) -> dict:
         "fjelstul",
         FJELSTUL_URL,
     )
+
+
+WARS = ((1915, 1918, "First World War"), (1939, 1945, "Second World War"))
+
+
+def _all_era_sections(early: dict, early_titles: dict, champions: Counter, clubs: dict) -> str:
+    """Top-flight titles in all eras, then First Division champions by season (with war gaps)."""
+
+    def display(key):
+        return clubs[key]["name"] if key in clubs else key
+
+    keys = set(early_titles) | set(champions)
+    counts = {k: len(early_titles.get(k, [])) + champions.get(k, 0) for k in keys}
+    ranked = sorted(counts, key=lambda k: (-counts[k], display(k)))
+    text = (
+        "## Record: most English top-flight league titles (all eras)\n"
+        "Which club has won the most English top-flight league titles in all eras? "
+        f"{_leaders(counts, display)}.\n"
+        "## English top-flight league titles by club (all eras)\n"
+        + " · ".join(
+            f"{display(k)} {counts[k]} ({len(early_titles.get(k, []))} First Division + "
+            f"{champions.get(k, 0)} Premier League)"
+            for k in ranked
+        )
+        + ".\n"
+        + f"{_subject(len(keys), 'different club')} been English top-flight champions.\n"
+    )
+    previous = None
+    for group in _groups(sorted(early)):
+        text += (
+            "## First Division champions and runners-up "
+            f"{season_label(group[0])}–{season_label(group[-1])}\n"
+        )
+        for season in group:
+            # Say when there was no football, so a question about 1942 finds an answer.
+            for start, end, war in WARS:
+                if previous is not None and int(previous) < start <= int(season):
+                    text += (
+                        f"No First Division football {season_label(str(start))}–"
+                        f"{season_label(str(end))} ({war}).\n"
+                    )
+            places = early[season]
+            text += (
+                f"{season_label(season)}: {places['champion']['name']} "
+                f"(runners-up {places['runner_up']['name']})\n"
+            )
+            previous = season
+    return text
