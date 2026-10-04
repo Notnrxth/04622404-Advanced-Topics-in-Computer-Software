@@ -136,8 +136,12 @@ def _records_document(seasons, tables, history, clubs, coverage, span) -> dict:
             f"{season_label(s)}: {name(at(s, 1))} (runners-up {name(at(s, 2))})\n" for s in group
         )
     ever = sorted((s for s, e in history.items() if len(e) == len(seasons)), key=name)
+    # Ever-present clubs can still be relegated in the last archived season.
+    never_down = not any(down for s in ever for _, _, down in history[s])
     text += "## Ever-present clubs\n" + (
-        f"มี {len(ever)} ทีมที่อยู่พรีเมียร์ลีกครบทุกฤดูกาล ({len(seasons)} ฤดูกาล) และไม่เคยตกชั้น\n"
+        f"มี {len(ever)} ทีมที่อยู่พรีเมียร์ลีกครบทุกฤดูกาล ({len(seasons)} ฤดูกาล)"
+        + (" และไม่เคยตกชั้น" if never_down else "")
+        + "\n"
         f"{_subject(len(ever), 'club')} played in all {len(seasons)} Premier League seasons: "
         + ", ".join(name(s) for s in ever)
         + ".\n"

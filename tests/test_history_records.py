@@ -238,3 +238,16 @@ def test_records_summary_lists_every_club_tied_on_most_titles():
     assert "Most Premier League titles: Arsenal FC, Chelsea FC (1).\n" in text
     assert "ทีมที่ได้แชมป์พรีเมียร์ลีกมากที่สุดคือ Arsenal FC, Chelsea FC (1 สมัย)" in text
     assert "## Ever-present clubs\nไม่มีทีมใดอยู่พรีเมียร์ลีกครบทุกฤดูกาล\n" in text
+
+
+def test_ever_present_club_relegated_in_the_last_season_is_not_called_never_relegated():
+    tables = {
+        "2000": table(["arsenal", "chelsea", "everton", "leeds-united", "fulham", "wimbledon"]),
+        "2001": table(
+            ["arsenal", "chelsea", "bolton-wanderers", "everton", "fulham", "derby-county"]
+        ),
+    }
+    text = body(make_record_documents(tables, CLUBS)[-1])
+    # Arsenal, Chelsea, Everton and Fulham play both seasons; Everton go down in the last one.
+    assert "มี 4 ทีมที่อยู่พรีเมียร์ลีกครบทุกฤดูกาล (2 ฤดูกาล)\n" in text
+    assert "ไม่เคยตกชั้น" not in text
