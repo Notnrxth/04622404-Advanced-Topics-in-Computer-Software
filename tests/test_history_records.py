@@ -345,7 +345,26 @@ def test_first_chunk_keeps_the_short_coverage_line():
             body(doc).count("Coverage: Premier League statistics are for 2000/01 to 2002/03.\n")
             == 1
         )
-        assert "all eras" not in first_chunk(doc)
+        assert "First Division titles before" not in first_chunk(doc)
+        assert "All eras count" not in first_chunk(doc)
+
+
+# Review 2026-10-04: a first chunk saying only "never won the Premier League title" could
+# make the chat say Everton never won the league. It now gives the all-era count too.
+def test_first_chunk_points_to_titles_in_all_eras():
+    d = early_docs()
+    assert (
+        "How many Premier League titles have Everton FC won? None. "
+        "English top-flight league titles in all eras: 2 (see below).\n"
+    ) in first_chunk(d["hist-club-everton"])
+    assert (
+        "How many Premier League titles have Arsenal FC won? 2 (2000/01, 2002/03). "
+        "English top-flight league titles in all eras: 3 (see below).\n"
+    ) in first_chunk(d["hist-club-arsenal"])
+    leeds = first_chunk(d["hist-club-leeds-united"])
+    assert "How many Premier League titles have Leeds United FC won? None.\n" in leeds
+    assert "in all eras" not in leeds
+    assert "in all eras" not in first_chunk(docs()["hist-club-everton"])
 
 
 def test_club_all_era_line_for_each_case():

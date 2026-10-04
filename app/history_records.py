@@ -103,10 +103,18 @@ def _club_document(slug, entries, clubs, coverage, span, total, early_titles, er
     # the club in English, and Thai text here outranked head-to-head documents (eval 2026-10-04).
     totals = _totals([row for _, row, _ in entries])
     # Phrased like the question: trivia chunks written as questions outranked plain labels.
+    all_eras = len(early_titles) + len(titles) if early_titles is not None else 0
     text = (
         coverage
         + f"How many Premier League titles have {name} won? "
-        + (f"{len(titles)} ({_labels(titles)}).\n" if titles else "None.\n")
+        + (f"{len(titles)} ({_labels(titles)})." if titles else "None.")
+        # Alone, "never won the Premier League" could read as never champions of England.
+        + (
+            f" English top-flight league titles in all eras: {all_eras} (see below)."
+            if all_eras
+            else ""
+        )
+        + "\n"
     )
     text += (
         f"{name} have won the Premier League title {_times(len(titles))}.\n"
@@ -145,7 +153,6 @@ def _club_document(slug, entries, clubs, coverage, span, total, early_titles, er
     text += f"All-time Premier League record: {table_stats(totals)}.\n"
     if early_titles is not None:
         # Its own heading, so the first chunk stays short (see the Coverage line).
-        all_eras = len(early_titles) + len(titles)
         text += "## English top-flight league titles (all eras)\n"
         text += f"How many English top-flight league titles have {name} won in all eras? " + (
             f"{all_eras} ({len(early_titles)} First Division, {len(titles)} Premier League).\n"
