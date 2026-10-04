@@ -112,6 +112,50 @@ def season_stats_line(stat: dict, season: str, as_of: str) -> str:
     )
 
 
+# The provider says "Offence"/"Defence"; fans ask for forwards and defenders.
+POSITION_GROUPS = {
+    "Goalkeeper": "Goalkeepers",
+    "Defence": "Defenders",
+    "Defender": "Defenders",
+    "Midfield": "Midfielders",
+    "Midfielder": "Midfielders",
+    "Offence": "Forwards",
+    "Forward": "Forwards",
+}
+POSITION_ORDER = ("Goalkeepers", "Defenders", "Midfielders", "Forwards")
+
+
+NOT_LISTED = "Position not listed"
+
+
+def squad_groups(players: list[dict]) -> list[tuple[str, list[str]]]:
+    """Player names by position group, in the usual order; unknown labels keep their name."""
+    groups: dict[str, list[str]] = {}
+    for player in players:
+        label = POSITION_GROUPS.get(player["position"], player["position"] or NOT_LISTED)
+        groups.setdefault(label, []).append(player["name"])
+    order = [g for g in POSITION_ORDER if g in groups]
+    order += [g for g in groups if g not in POSITION_ORDER and g != NOT_LISTED]
+    order += [NOT_LISTED] if NOT_LISTED in groups else []
+    return [(g, groups[g]) for g in order]
+
+
+def squad_list(team: str, players: list[dict]) -> str:
+    """The whole squad by position, so one chunk answers "who is in the squad"."""
+    lines = [f"{team} squad list ({len(players)} players):"]
+    lines += [f"{g} ({len(names)}): {', '.join(names)}." for g, names in squad_groups(players)]
+    return "\n".join(lines)
+
+
+def position_sections(team: str, players: list[dict]) -> list[str]:
+    """One short chunk per position: the long squad list lost to one-player chunks."""
+    return [
+        f"## {team} {g.lower()}\n{team} {g.lower()} ({len(names)}): {', '.join(names)}."
+        for g, names in squad_groups(players)
+        if g != NOT_LISTED
+    ]
+
+
 def squad_document(squad: dict, season: str, stats: dict[int, dict] | None = None) -> dict:
     team = squad["team_name"]
     as_of = squad["fetched_at"][:10]
@@ -119,7 +163,9 @@ def squad_document(squad: dict, season: str, stats: dict[int, dict] | None = Non
     intro = f"Premier League {season} squad: {team}."
     if squad["coach"]:
         intro += f" Coach: {squad['coach']['name']}."
-    sections = []
+    # Each player below is a chunk of its own; only five chunks reach generation.
+    intro += "\n" + squad_list(team, squad["players"])
+    sections = position_sections(team, squad["players"])
     for player in squad["players"]:
         section = (
             f"## {player['name']}\n"

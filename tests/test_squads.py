@@ -95,7 +95,7 @@ def test_squad_document_follows_the_contract_shape():
 def test_squad_document_has_one_heading_per_player_and_keeps_special_characters():
     text = squad_document(squad_payload(raw_team(), FETCHED_AT), "2026")["text"]
     assert text.startswith("Premier League 2026 squad: Arsenal FC. Coach: Mikel Arteta.")
-    assert text.count("\n## ") == 2
+    assert text.count("\n## ") == 4  # two players and two position lists
     assert "## Martin Ødegaard" in text
     assert (
         "Team: Arsenal FC. Position: Midfielder. Date of birth: 1998-12-17. Nationality: Norway."
@@ -108,6 +108,81 @@ def test_squad_document_never_prints_none_for_missing_fields():
     assert "None" not in text
     assert "Coach:" not in text
     assert "Position: unknown. Date of birth: unknown. Nationality: unknown." in text
+
+
+def squad_text(players):
+    return squad_document(squad_payload(raw_team(squad=players), FETCHED_AT), "2026")["text"]
+
+
+def player(name, position):
+    return {"id": abs(hash(name)) % 10_000, "name": name, "position": position}
+
+
+# Live chat test 2026-10-05: "นักเตะในทีม Arsenal มีใครบ้าง" listed 4 of 24 players, because
+# each player is its own chunk and only five chunks reach generation; "กองหน้า" found nothing,
+# because the provider says "Offence". The first chunk now lists the whole squad by position.
+def test_first_chunk_lists_the_whole_squad_by_position():
+    text = squad_text(
+        [
+            player("Kepa Arrizabalaga", "Goalkeeper"),
+            player("William Saliba", "Defence"),
+            player("Ben White", "Defence"),
+            player("Declan Rice", "Midfield"),
+            player("Bukayo Saka", "Offence"),
+            player("Trialist", None),
+        ]
+    )
+    first_chunk = text.split("\n## ", 1)[0]
+    assert first_chunk == (
+        "Premier League 2026 squad: Arsenal FC. Coach: Mikel Arteta.\n"
+        "Arsenal FC squad list (6 players):\n"
+        "Goalkeepers (1): Kepa Arrizabalaga.\n"
+        "Defenders (2): William Saliba, Ben White.\n"
+        "Midfielders (1): Declan Rice.\n"
+        "Forwards (1): Bukayo Saka.\n"
+        "Position not listed (1): Trialist.\n"
+    )
+
+
+def test_squad_list_accepts_both_spellings_and_keeps_unknown_labels():
+    text = squad_text(
+        [
+            player("Martin Ødegaard", "Midfielder"),
+            player("Gabriel Jesus", "Forward"),
+            player("Riccardo Calafiori", "Defender"),
+            player("Ethan Nwaneri", "Centre-Forward"),
+        ]
+    )
+    assert "Midfielders (1): Martin Ødegaard.\n" in text
+    assert "Forwards (1): Gabriel Jesus.\n" in text
+    assert "Defenders (1): Riccardo Calafiori.\n" in text
+    assert "Centre-Forward (1): Ethan Nwaneri.\n" in text
+    assert "Goalkeepers" not in text
+
+
+# Live chat test 2026-10-05: "Everton มีกองหน้าคนไหนบ้าง" still found nothing; the long squad
+# list lost to the short one-player chunks. Each position also gets a short chunk of its own.
+def test_each_position_has_a_short_chunk_of_its_own():
+    text = squad_text(
+        [
+            player("Kepa Arrizabalaga", "Goalkeeper"),
+            player("William Saliba", "Defence"),
+            player("Declan Rice", "Midfield"),
+            player("Bukayo Saka", "Offence"),
+            player("Kai Havertz", "Offence"),
+            player("Trialist", None),
+        ]
+    )
+    assert "## Arsenal FC forwards\nArsenal FC forwards (2): Bukayo Saka, Kai Havertz.\n" in text
+    assert "## Arsenal FC goalkeepers\nArsenal FC goalkeepers (1): Kepa Arrizabalaga.\n" in text
+    assert "## Arsenal FC defenders\n" in text and "## Arsenal FC midfielders\n" in text
+    assert "## Arsenal FC position not listed" not in text
+    # Position chunks come before the player chunks, after the squad list.
+    assert (
+        text.index("squad list")
+        < text.index("## Arsenal FC goalkeepers")
+        < text.index("## Kepa Arrizabalaga")
+    )
 
 
 def upstream_factory(indexed: dict, teams: list[dict]):
