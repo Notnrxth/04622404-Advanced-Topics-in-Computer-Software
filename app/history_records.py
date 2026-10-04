@@ -169,21 +169,28 @@ def _records_document(seasons, tables, history, clubs, coverage, span) -> dict:
         if row["losses"] == 0
     ]
     # Each record reads as the question fans ask, with its answer, like the trivia it competes with.
-    text += "## All-time records\n"
+    # One record per heading: the chunker splits on headings, and a short chunk with one
+    # question ranks like the trivia it competes with; four records in one chunk ranked lower.
     points = {slug: t["points"] for slug, t in totals.items()}
-    text += f"Which club has the most all-time Premier League points? {_leaders(points, name)}.\n"
+    text += (
+        "## Record: most all-time Premier League points\n"
+        f"Which club has the most all-time Premier League points? {_leaders(points, name)}.\n"
+    )
     runners_up = Counter(at(s, 2) for s in seasons)
     text += (
+        "## Record: most Premier League runner-up finishes\n"
         "Which club has finished runner-up the most times in the Premier League? "
         f"{_leaders(runners_up, name)}.\n"
     )
     downs = Counter(s for s, e in history.items() for _, _, down in e if down)
     if downs:
         text += (
+            "## Record: most Premier League relegations\n"
             "Which club has been relegated from the Premier League the most times? "
             f"{_leaders(downs, name)}.\n"
         )
     text += (
+        "## Record: unbeaten Premier League seasons\n"
         "Which club went a whole Premier League season unbeaten? "
         + (", ".join(unbeaten) if unbeaten else "None")
         + ".\n"

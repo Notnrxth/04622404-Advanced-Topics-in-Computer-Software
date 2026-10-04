@@ -276,14 +276,18 @@ def test_club_record_sentence_uses_the_words_people_ask_with():
 
 
 def test_records_all_time_records_section():
+    # One record per heading, so each is a short chunk like the trivia it competes with.
     text = body(docs()["hist-records"])
     assert (
-        "## All-time records\n"
+        "## Record: most all-time Premier League points\n"
         "Which club has the most all-time Premier League points? Arsenal FC (42).\n"
+        "## Record: most Premier League runner-up finishes\n"
         "Which club has finished runner-up the most times in the Premier League? "
         "Arsenal FC, Chelsea FC, Everton FC (1).\n"
+        "## Record: most Premier League relegations\n"
         "Which club has been relegated from the Premier League the most times? "
         "Bolton Wanderers FC, Fulham FC, Leeds United FC (2).\n"
+        "## Record: unbeaten Premier League seasons\n"
         "Which club went a whole Premier League season unbeaten? Arsenal FC 2000/01, "
         "Chelsea FC 2001/02, Arsenal FC 2002/03.\n"
         "## Champions and runners-up"
