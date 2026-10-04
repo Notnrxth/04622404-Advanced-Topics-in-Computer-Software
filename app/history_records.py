@@ -25,6 +25,16 @@ def _subject(n: int, noun: str) -> str:
     return f"{n} {noun}s have" if n != 1 else f"{n} {noun} has"
 
 
+def _times(n: int) -> str:
+    return "once" if n == 1 else f"{n} times"
+
+
+def _leaders(counts: dict, name) -> str:
+    """Every club tied on the highest count, by name, then the count: "A, B (3)"."""
+    most = max(counts.values())
+    return ", ".join(sorted((name(s) for s, n in counts.items() if n == most))) + f" ({most})"
+
+
 def _totals(rows: list[dict]) -> dict:
     return {field: sum(row[field] for row in rows) for field in FIELDS}
 
@@ -64,12 +74,34 @@ def _club_document(slug, entries, clubs, coverage, span, total) -> dict:
     best_count = positions.count(best)
     # A plain sentence so keyword search matches how fans ask. English only: the router names
     # the club in English, and Thai text here outranked head-to-head documents (eval 2026-10-04).
-    times = {0: None, 1: "once"}.get(len(titles), f"{len(titles)} times")
-    text = coverage + (
-        f"{name} have won the Premier League title {times}.\n"
-        if times
+    totals = _totals([row for _, row, _ in entries])
+    # Phrased like the question: trivia chunks written as questions outranked plain labels.
+    text = (
+        coverage
+        + f"How many Premier League titles have {name} won? "
+        + (f"{len(titles)} ({_labels(titles)}).\n" if titles else "None.\n")
+    )
+    text += (
+        f"{name} have won the Premier League title {_times(len(titles))}.\n"
+        if titles
         else f"{name} have never won the Premier League title.\n"
     )
+    # Use the words people search with (runner-up, relegated, points), not only the labels below.
+    text += (
+        f"{name} "
+        + (
+            f"finished runner-up {_times(len(runners_up))}"
+            if runners_up
+            else "never finished runner-up"
+        )
+        + ", "
+        + (f"were relegated {_times(len(relegations))}" if relegations else "were never relegated")
+        + f" and played {len(entries)} of {total} Premier League seasons. "
+        + f"Total Premier League points: {totals['points']}.\n"
+    )
+    unbeaten = [s for s, row, _ in entries if row["losses"] == 0]
+    if unbeaten:
+        text += f"Unbeaten Premier League seasons (no defeats): {_labels(unbeaten)}.\n"
     text += (
         _counted("Premier League titles", titles)
         if titles
@@ -83,9 +115,7 @@ def _club_document(slug, entries, clubs, coverage, span, total) -> dict:
         f"Worst finish: {ordinal(worst)} "
         f"({_labels([s for s, row, _ in entries if row['position'] == worst])}).\n"
     )
-    text += (
-        f"All-time Premier League record: {table_stats(_totals([row for _, row, _ in entries]))}.\n"
-    )
+    text += f"All-time Premier League record: {table_stats(totals)}.\n"
     for group in _groups(entries):
         text += f"## Finishes by season {season_label(group[0][0])}–{season_label(group[-1][0])}\n"
         text += "".join(
@@ -122,7 +152,8 @@ def _records_document(seasons, tables, history, clubs, coverage, span) -> dict:
     ranked = sorted(champions.items(), key=lambda item: (-item[1], name(item[0])))
     most = ranked[0][1]
     leaders = ", ".join(name(slug) for slug, count in ranked if count == most)
-    text = coverage + "## Titles by club\n"
+    # Coverage under the first heading: alone above it, it became a chunk with nothing else.
+    text = "## Titles by club\n" + coverage
     text += f"Most Premier League titles: {leaders} ({most}).\n"
     text += (
         f"ทีมที่ได้แชมป์พรีเมียร์ลีกมากที่สุดคือ {leaders} ({most} สมัย) "
@@ -130,6 +161,33 @@ def _records_document(seasons, tables, history, clubs, coverage, span) -> dict:
     )
     text += " · ".join(f"{name(slug)} {count}" for slug, count in ranked) + ".\n"
     text += f"{_subject(len(champions), 'different club')} won the Premier League.\n"
+    totals = {slug: _totals([row for _, row, _ in e]) for slug, e in history.items()}
+    unbeaten = [
+        f"{name(row['club_slug'])} {season_label(s)}"
+        for s in seasons
+        for row in sorted(tables[s], key=lambda r: r["position"])
+        if row["losses"] == 0
+    ]
+    # Each record reads as the question fans ask, with its answer, like the trivia it competes with.
+    text += "## All-time records\n"
+    points = {slug: t["points"] for slug, t in totals.items()}
+    text += f"Which club has the most all-time Premier League points? {_leaders(points, name)}.\n"
+    runners_up = Counter(at(s, 2) for s in seasons)
+    text += (
+        "Which club has finished runner-up the most times in the Premier League? "
+        f"{_leaders(runners_up, name)}.\n"
+    )
+    downs = Counter(s for s, e in history.items() for _, _, down in e if down)
+    if downs:
+        text += (
+            "Which club has been relegated from the Premier League the most times? "
+            f"{_leaders(downs, name)}.\n"
+        )
+    text += (
+        "Which club went a whole Premier League season unbeaten? "
+        + (", ".join(unbeaten) if unbeaten else "None")
+        + ".\n"
+    )
     for group in _groups(seasons):
         text += f"## Champions and runners-up {season_label(group[0])}–{season_label(group[-1])}\n"
         text += "".join(
@@ -149,7 +207,6 @@ def _records_document(seasons, tables, history, clubs, coverage, span) -> dict:
         else "ไม่มีทีมใดอยู่พรีเมียร์ลีกครบทุกฤดูกาล\n"
         f"No club has played in all {len(seasons)} Premier League seasons.\n"
     )
-    totals = {slug: _totals([row for _, row, _ in e]) for slug, e in history.items()}
     order = sorted(
         totals,
         key=lambda s: (

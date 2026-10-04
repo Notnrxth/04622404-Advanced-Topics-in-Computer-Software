@@ -86,10 +86,13 @@ def test_metadata_and_license_follow_the_archive():
         assert doc["url"] == "https://github.com/jfjelstul/englishfootball"
         assert doc["season"] is doc["matchweek"] is doc["date"] is doc["fetched_at"] is None
         assert "Joshua C. Fjelstul, Ph.D." in doc["text"]
-        assert body(doc).startswith(
+        coverage = (
             "Coverage: Premier League seasons 2000/01 to 2002/03 only. Top-flight league titles "
             "won before the Premier League began in 1992 (First Division) are not included.\n"
         )
+        # The records document has no chunk of its own for the coverage line alone.
+        first = "## Titles by club\n" if doc["topic"] == "league_records" else ""
+        assert body(doc).startswith(first + coverage)
     d = docs()
     assert d["hist-club-arsenal"]["topic"] == "club_record"
     assert d["hist-club-arsenal"]["title"] == "Arsenal FC — Premier League record 2000/01–2002/03"
@@ -207,9 +210,7 @@ def test_club_summary_sentence_in_english_only():
     # Thai text here outranked head-to-head documents for Thai questions (eval 2026-10-04).
     d = docs()
     arsenal = body(d["hist-club-arsenal"])
-    assert "Arsenal FC have won the Premier League title 2 times.\nPremier League titles: 2" in (
-        arsenal
-    )
+    assert "Arsenal FC have won the Premier League title 2 times.\n" in arsenal
     assert "Chelsea FC have won the Premier League title once.\n" in body(d["hist-club-chelsea"])
     assert "Everton FC have never won the Premier League title.\n" in body(d["hist-club-everton"])
     assert not any(
@@ -223,7 +224,7 @@ def test_club_summary_sentence_in_english_only():
 def test_records_summary_sentences_in_english_and_thai():
     text = body(docs()["hist-records"])
     assert (
-        "## Titles by club\nMost Premier League titles: Arsenal FC (2).\n"
+        "(First Division) are not included.\nMost Premier League titles: Arsenal FC (2).\n"
         "ทีมที่ได้แชมป์พรีเมียร์ลีกมากที่สุดคือ Arsenal FC (2 สมัย) "
         "มีทั้งหมด 2 ทีมที่เคยได้แชมป์พรีเมียร์ลีก\nArsenal FC 2 · Chelsea FC 1.\n"
     ) in text
@@ -251,3 +252,61 @@ def test_ever_present_club_relegated_in_the_last_season_is_not_called_never_rele
     # Arsenal, Chelsea, Everton and Fulham play both seasons; Everton go down in the last one.
     assert "มี 4 ทีมที่อยู่พรีเมียร์ลีกครบทุกฤดูกาล (2 ฤดูกาล)\n" in text
     assert "ไม่เคยตกชั้น" not in text
+
+
+# Live chat test 2026-10-04: questions on relegations, total points and unbeaten seasons found
+# nothing, because the documents lacked the words people search with (relegated, points).
+def test_club_record_sentence_uses_the_words_people_ask_with():
+    d = docs()
+    assert (
+        "Arsenal FC have won the Premier League title 2 times.\n"
+        "Arsenal FC finished runner-up once, were never relegated and played 3 of 3 "
+        "Premier League seasons. Total Premier League points: 42.\n"
+        "Unbeaten Premier League seasons (no defeats): 2000/01, 2002/03.\n"
+        "Premier League titles: 2"
+    ) in body(d["hist-club-arsenal"])
+    leeds = body(d["hist-club-leeds-united"])
+    assert (
+        "Leeds United FC never finished runner-up, were relegated 2 times and played 2 of 3 "
+        "Premier League seasons. Total Premier League points: 9.\n"
+    ) in leeds
+    assert "Unbeaten" not in leeds
+    derby = body(d["hist-club-derby-county"])
+    assert "were relegated once and played 1 of 3 Premier League seasons." in derby
+
+
+def test_records_all_time_records_section():
+    text = body(docs()["hist-records"])
+    assert (
+        "## All-time records\n"
+        "Which club has the most all-time Premier League points? Arsenal FC (42).\n"
+        "Which club has finished runner-up the most times in the Premier League? "
+        "Arsenal FC, Chelsea FC, Everton FC (1).\n"
+        "Which club has been relegated from the Premier League the most times? "
+        "Bolton Wanderers FC, Fulham FC, Leeds United FC (2).\n"
+        "Which club went a whole Premier League season unbeaten? Arsenal FC 2000/01, "
+        "Chelsea FC 2001/02, Arsenal FC 2002/03.\n"
+        "## Champions and runners-up"
+    ) in text
+
+
+def test_records_without_an_unbeaten_season_say_so():
+    tables = {"2000": table(["arsenal", "chelsea", "everton", "leeds-united"])}
+    tables["2000"][0]["losses"] = 1
+    text = body(make_record_documents(tables, CLUBS)[-1])
+    assert "Which club went a whole Premier League season unbeaten? None.\n" in text
+
+
+# Live chat test 2026-10-04: trivia chunks phrased as questions ("Which team has the most …",
+# "How many …") outranked the record lines, so the records read the same way.
+def test_club_record_opens_with_the_question_people_ask():
+    d = docs()
+    assert body(d["hist-club-arsenal"]).startswith(
+        "Coverage: Premier League seasons 2000/01 to 2002/03 only. Top-flight league titles "
+        "won before the Premier League began in 1992 (First Division) are not included.\n"
+        "How many Premier League titles have Arsenal FC won? 2 (2000/01, 2002/03).\n"
+        "Arsenal FC have won the Premier League title 2 times.\n"
+    )
+    assert "How many Premier League titles have Everton FC won? None.\n" in body(
+        d["hist-club-everton"]
+    )

@@ -151,6 +151,12 @@ def test_all_pinned_seasons_and_all_team_aliases():
         "Liverpool FC 2 · Blackburn Rovers FC 1 · Leicester City FC 1.\n"
     ) in records
     assert "7 different clubs have won the Premier League.\n" in records
+    assert "most all-time Premier League points? Manchester United FC (2614).\n" in records
+    assert "runner-up the most times in the Premier League? Arsenal FC (9).\n" in records
+    assert "relegated from the Premier League the most times? Norwich City FC (6).\n" in records
+    assert (
+        "Which club went a whole Premier League season unbeaten? Arsenal FC 2003/04.\n" in records
+    )
     united = next(d for d in docs if d["doc_id"] == "hist-club-manchester-united")["text"]
     assert "Premier League titles: 13 (" in united
     assert "Seasons in the Premier League: 34 of 34. Relegations: 0.\n" in united
