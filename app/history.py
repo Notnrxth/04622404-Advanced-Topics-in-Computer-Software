@@ -257,9 +257,7 @@ def historical_document(clubs, doc_id, title, text, topic, season, slugs, origin
         "topic": topic,
         "season": season,
         "matchweek": None,
-        "team_ids": sorted(
-            {clubs[s]["team_id"] for s in slugs if clubs[s]["team_id"] is not None}
-        ),
+        "team_ids": sorted({clubs[s]["team_id"] for s in slugs if clubs[s]["team_id"] is not None}),
         "date": None,
         "fetched_at": None,
         "url": url,
