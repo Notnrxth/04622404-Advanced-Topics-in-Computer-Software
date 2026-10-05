@@ -625,27 +625,27 @@ class FootballService:
         """One head coach document per team (CONTRACT v1.16); none when Wikidata fails."""
         if not self.settings.coach_index_enabled:
             return []
-        qids = load_club_qids()
-        known = [team for team in teams if team["team_id"] in qids]
         try:
+            qids = load_club_qids()
+            known = [team for team in teams if team["team_id"] in qids]
             coaches = await fetch_coaches(
                 self.http, [qids[team["team_id"]] for team in known], self.settings.version
             )
-        except CoachFetchError as exc:
+            return [
+                coach_document(
+                    team["team_id"],
+                    team["name"],
+                    qids[team["team_id"]],
+                    current_coach(coaches.get(qids[team["team_id"]], [])),
+                    season,
+                    fetched_at,
+                )
+                for team in known
+            ]
+        except (CoachFetchError, Exception) as exc:  # noqa: BLE001 - coaches must never stop the ingest
             # The previous coach documents stay in the index until Wikidata answers again.
             logger.warning("coach_fetch_failed request_id=%s error=%s", request_id, exc)
             return []
-        return [
-            coach_document(
-                team["team_id"],
-                team["name"],
-                qids[team["team_id"]],
-                current_coach(coaches.get(qids[team["team_id"]], [])),
-                season,
-                fetched_at,
-            )
-            for team in known
-        ]
 
     async def _ingest_primary(self, request_id: str) -> None:
         season = current_season()

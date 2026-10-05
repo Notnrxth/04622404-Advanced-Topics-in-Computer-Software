@@ -101,12 +101,27 @@ def test_parse_skips_incomplete_bindings():
 
 
 def test_parse_skips_unlabelled_coaches():
-    assert parse_coaches(payload(binding("Q9617", "Q123456"))) == {}
+    assert parse_coaches(payload(binding("Q9617", "Q123456"), binding("Q9616", "Xabi Alonso"))) == {
+        "Q9616": [{"name": "Xabi Alonso", "rank": "normal", "start": None, "end": None}]
+    }
 
 
 def test_parse_rejects_a_payload_without_bindings():
     with pytest.raises(CoachFetchError):
         parse_coaches({"head": {}})
+
+
+# Final review 2026-10-05: an answer with nothing usable must not overwrite good documents.
+@pytest.mark.parametrize("rows", [[], [binding("Q9617", "Q123456")], None, ["not a row"]])
+def test_parse_rejects_an_answer_with_no_usable_statement(rows):
+    with pytest.raises(CoachFetchError):
+        parse_coaches({"results": {"bindings": rows}})
+
+
+def test_parse_reads_an_unknown_start_as_no_start():
+    row = binding("Q18656", "Michael Carrick", "Preferred")
+    row["start"] = {"type": "uri", "value": "http://www.wikidata.org/.well-known/genid/abc"}
+    assert parse_coaches(payload(row))["Q18656"][0]["start"] is None
 
 
 def statement(name, rank="normal", start=None, end=None):
@@ -330,7 +345,10 @@ async def test_ingest_skips_teams_without_a_qid(tmp_path):
     assert f"coach-{season}-team-9999" not in indexed
 
 
-@pytest.mark.parametrize("failure", [httpx.Response(503), httpx.Response(200, text="<html>")])
+@pytest.mark.parametrize(
+    "failure",
+    [httpx.Response(503), httpx.Response(200, text="<html>"), httpx.Response(200, json=payload())],
+)
 async def test_a_failed_fetch_keeps_the_previous_coach_documents(tmp_path, failure):
     season = current_season()
     indexed, _ = await ingest(tmp_path)
@@ -345,4 +363,16 @@ async def test_a_failed_fetch_keeps_the_previous_coach_documents(tmp_path, failu
 async def test_the_flag_off_means_no_wikidata_call(tmp_path):
     indexed, calls = await ingest(tmp_path, enabled=False)
     assert calls == []
+    assert not any(doc_id.startswith("coach-") for doc_id in indexed)
+
+
+async def test_any_coach_error_leaves_the_rest_of_the_ingest_running(tmp_path, monkeypatch):
+    season = current_season()
+
+    def broken():
+        raise ValueError("wikidata_clubs.json is not valid JSON")
+
+    monkeypatch.setattr("app.service.load_club_qids", broken)
+    indexed, _ = await ingest(tmp_path)
+    assert f"standings-{season}" in indexed
     assert not any(doc_id.startswith("coach-") for doc_id in indexed)

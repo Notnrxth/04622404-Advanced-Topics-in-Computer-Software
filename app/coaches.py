@@ -14,6 +14,8 @@ SPARQL_URL = "https://query.wikidata.org/sparql"
 REPO_URL = "https://github.com/sakda1306/Advanced-Topic-in-Computer-Software-Course-Team-D-II"
 TIMEOUT_SECONDS = 20.0
 QID = re.compile(r"^Q\d+$")
+# An "unknown value" date comes back as a genid URI, not as a date.
+ISO_DAY = re.compile(r"^\d{4}-\d{2}-\d{2}")
 MONTHS = (
     "January",
     "February",
@@ -61,8 +63,12 @@ def parse_coaches(payload: dict) -> dict[str, list[dict]]:
         rows = payload["results"]["bindings"]
     except (KeyError, TypeError) as exc:
         raise CoachFetchError("no bindings in the SPARQL answer") from exc
+    if not isinstance(rows, list):
+        raise CoachFetchError("bindings is not a list")
     coaches: dict[str, list[dict]] = {}
     for row in rows:
+        if not isinstance(row, dict):
+            continue
         club, name, rank = _value(row, "club"), _value(row, "coachLabel"), _value(row, "rank")
         # Without an English label Wikidata returns the QID itself; that is no name to show.
         if not club or not name or not rank or QID.match(name):
@@ -72,10 +78,14 @@ def parse_coaches(payload: dict) -> dict[str, list[dict]]:
             {
                 "name": name,
                 "rank": rank.rsplit("#", 1)[-1].removesuffix("Rank").lower(),
-                "start": start[:10] if start else None,
-                "end": end[:10] if end else None,
+                "start": start[:10] if start and ISO_DAY.match(start) else None,
+                # An unknown end date still means the job ended.
+                "end": (end[:10] if ISO_DAY.match(end) else "unknown") if end else None,
             }
         )
+    if not coaches:
+        # Nothing usable: keep the previous documents instead of writing "no coach" for every club.
+        raise CoachFetchError("no usable head coach statement")
     return coaches
 
 
