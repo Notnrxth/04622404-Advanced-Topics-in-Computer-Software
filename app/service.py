@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api_football import enriched_match, match_api_fixture
 from app.coaches import (
+    QID,
     CoachFetchError,
     coach_document,
     current_coach,
@@ -627,7 +628,10 @@ class FootballService:
             return []
         try:
             qids = load_club_qids()
-            known = [team for team in teams if team["team_id"] in qids]
+            # A malformed QID must not turn into a "no coach" document over a good one.
+            known = [team for team in teams if QID.match(qids.get(team["team_id"], ""))]
+            if not known:
+                return []
             coaches = await fetch_coaches(
                 self.http, [qids[team["team_id"]] for team in known], self.settings.version
             )

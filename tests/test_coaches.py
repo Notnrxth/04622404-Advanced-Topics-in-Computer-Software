@@ -395,3 +395,19 @@ async def test_fetch_without_a_valid_qid_makes_no_call():
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         assert await fetch_coaches(http, ["bad", ""], "0.1.0") == {}
     assert calls == []
+
+
+# Final review 2026-10-05: a malformed QID keeps the previous coach documents (no "no coach" one).
+async def test_ingest_skips_teams_whose_qid_is_malformed(tmp_path, monkeypatch):
+    season = current_season()
+    monkeypatch.setattr("app.service.load_club_qids", lambda: {57: "Q9617", 61: "not-a-qid"})
+    indexed, _ = await ingest(tmp_path)
+    assert f"coach-{season}-team-57" in indexed
+    assert f"coach-{season}-team-61" not in indexed
+
+
+async def test_ingest_with_no_valid_qid_writes_no_coach_documents(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.service.load_club_qids", lambda: {57: "bad", 61: ""})
+    indexed, calls = await ingest(tmp_path)
+    assert calls == []
+    assert not any(doc_id.startswith("coach-") for doc_id in indexed)
