@@ -1,3 +1,5 @@
+import json
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -11,6 +13,9 @@ from app.coaches import (
     load_club_qids,
     parse_coaches,
 )
+from app.config import Settings
+from app.football import current_season
+from app.main import create_app
 
 CURRENT_TEAMS = {
     57,
@@ -233,3 +238,111 @@ async def test_fetch_timeout_raises_one_error():
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         with pytest.raises(CoachFetchError):
             await fetch_coaches(http, ["Q18656"], "0.1.0")
+
+
+WIKIDATA = payload(
+    binding("Q9617", "Mikel Arteta", "Preferred", "2019-12-20"),
+    binding("Q9617", "Unai Emery", "Normal", "2018-05-23", "2019-11-29"),
+)
+
+
+def team(team_id, name):
+    return {
+        "id": team_id,
+        "name": name,
+        "coach": None,
+        "squad": [{"id": team_id * 100, "name": f"{name} Player", "position": "Defender"}],
+    }
+
+
+def upstream(indexed, *, wikidata, teams):
+    async def handler(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if request.url.host == "query.wikidata.org":
+            return wikidata(request) if callable(wikidata) else wikidata
+        if path.endswith("/teams"):
+            return httpx.Response(200, json={"teams": teams})
+        if path.endswith("/matches"):
+            return httpx.Response(200, json={"matches": []})
+        if path.endswith("/standings"):
+            return httpx.Response(
+                200,
+                json={
+                    "season": {"currentMatchday": 1},
+                    "standings": [{"type": "TOTAL", "table": []}],
+                },
+            )
+        if path.endswith("/scorers"):
+            return httpx.Response(200, json={"scorers": []})
+        if path == "/index/upsert":
+            for document in json.loads(request.content)["documents"]:
+                indexed[document["doc_id"]] = document
+            return httpx.Response(200, json={"upserted": 1})
+        if request.method == "DELETE" and path.startswith("/index/"):
+            indexed.pop(path.removeprefix("/index/"), None)
+            return httpx.Response(200, json={"deleted": True})
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    return handler
+
+
+async def ingest(tmp_path, *, enabled=True, wikidata=None, teams=None, indexed=None):
+    indexed = {} if indexed is None else indexed
+    calls = []
+
+    def wrap(request):
+        calls.append(request)
+        answer = wikidata if wikidata is not None else httpx.Response(200, json=WIKIDATA)
+        return answer(request) if callable(answer) else answer
+
+    settings = Settings(
+        database_url=f"sqlite+aiosqlite:///{tmp_path / 'football.db'}",
+        football_data_api_key="test-key",
+        coach_index_enabled=enabled,
+        _env_file=None,
+    )
+    teams = teams or [team(57, "Arsenal FC"), team(61, "Chelsea FC")]
+    client = httpx.AsyncClient(
+        transport=httpx.MockTransport(upstream(indexed, wikidata=wrap, teams=teams))
+    )
+    app = create_app(settings, http=client)
+    async with app.router.lifespan_context(app):
+        await app.state.service._ingest_primary(str(uuid4()))
+        await app.state.service.reconcile_index()
+    await client.aclose()
+    return indexed, calls
+
+
+async def test_ingest_indexes_one_coach_document_per_team(tmp_path):
+    season = current_season()
+    indexed, calls = await ingest(tmp_path)
+    assert len(calls) == 1
+    assert "Mikel Arteta, since 20 December 2019" in indexed[f"coach-{season}-team-57"]["text"]
+    assert indexed[f"coach-{season}-team-61"]["text"].startswith(
+        "Wikidata lists no current head coach for Chelsea FC"
+    )
+
+
+async def test_ingest_skips_teams_without_a_qid(tmp_path):
+    season = current_season()
+    indexed, _ = await ingest(tmp_path, teams=[team(57, "Arsenal FC"), team(9999, "Unknown FC")])
+    assert f"coach-{season}-team-57" in indexed
+    assert f"coach-{season}-team-9999" not in indexed
+
+
+@pytest.mark.parametrize("failure", [httpx.Response(503), httpx.Response(200, text="<html>")])
+async def test_a_failed_fetch_keeps_the_previous_coach_documents(tmp_path, failure):
+    season = current_season()
+    indexed, _ = await ingest(tmp_path)
+    before = dict(indexed[f"coach-{season}-team-57"])
+    indexed, _ = await ingest(tmp_path, wikidata=failure, indexed=indexed)
+    assert indexed[f"coach-{season}-team-57"] == before
+    assert any(
+        doc_id.startswith("standings-") for doc_id in indexed
+    )  # the rest of the ingest still ran
+
+
+async def test_the_flag_off_means_no_wikidata_call(tmp_path):
+    indexed, calls = await ingest(tmp_path, enabled=False)
+    assert calls == []
+    assert not any(doc_id.startswith("coach-") for doc_id in indexed)

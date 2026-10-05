@@ -16,6 +16,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.api_football import enriched_match, match_api_fixture
+from app.coaches import (
+    CoachFetchError,
+    coach_document,
+    current_coach,
+    fetch_coaches,
+    load_club_qids,
+)
 from app.config import Settings
 from app.db import (
     ApiQuota,
@@ -612,6 +619,34 @@ class FootballService:
         except Exception as exc:
             await self._finish_job(job_id, f"{type(exc).__name__}: {exc}")
 
+    async def _coach_documents(
+        self, teams: list[dict], season: str, fetched_at: str, request_id: str
+    ) -> list[dict]:
+        """One head coach document per team (CONTRACT v1.16); none when Wikidata fails."""
+        if not self.settings.coach_index_enabled:
+            return []
+        qids = load_club_qids()
+        known = [team for team in teams if team["team_id"] in qids]
+        try:
+            coaches = await fetch_coaches(
+                self.http, [qids[team["team_id"]] for team in known], self.settings.version
+            )
+        except CoachFetchError as exc:
+            # The previous coach documents stay in the index until Wikidata answers again.
+            logger.warning("coach_fetch_failed request_id=%s error=%s", request_id, exc)
+            return []
+        return [
+            coach_document(
+                team["team_id"],
+                team["name"],
+                qids[team["team_id"]],
+                current_coach(coaches.get(qids[team["team_id"]], [])),
+                season,
+                fetched_at,
+            )
+            for team in known
+        ]
+
     async def _ingest_primary(self, request_id: str) -> None:
         season = current_season()
         # Fetch all responses before changing any database rows.
@@ -663,6 +698,7 @@ class FootballService:
             "completed" if standing["matchweek"] in completed_weeks else "live"
         )
         derived_weeks = [week for week in completed_weeks if week != standing["matchweek"]]
+        coach_documents = await self._coach_documents(teams, season, fetched_at, request_id)
         async with self.sessions() as db:
             for item in teams:
                 await db.merge(Team(team_id=item["team_id"], payload=item))
@@ -720,6 +756,7 @@ class FootballService:
             if self.settings.player_index_enabled:
                 stats = {s["player_id"]: s for s in scorers if s["player_id"] is not None}
                 documents += [squad_document(squad, season, stats) for squad in squads]
+            documents += coach_documents
             await self._queue_documents(db, documents, request_id)
             cleanup_key = f"standings_legacy_cleanup_queued_{season}"
             if (
