@@ -43,7 +43,7 @@ def load_club_qids(path: Path = CLUBS_FILE) -> dict[int, str]:
 
 
 def coach_query(qids: list[str]) -> str:
-    clubs = " ".join(f"wd:{qid}" for qid in qids)
+    clubs = " ".join(f"wd:{qid}" for qid in qids if QID.match(qid))
     return (
         "SELECT ?club ?coachLabel ?rank ?start ?end WHERE { "
         f"VALUES ?club {{ {clubs} }} "
@@ -135,6 +135,9 @@ def coach_document(
 async def fetch_coaches(
     http: httpx.AsyncClient, qids: list[str], version: str
 ) -> dict[str, list[dict]]:
+    qids = [qid for qid in qids if QID.match(qid)]
+    if not qids:
+        return {}
     headers = {
         "User-Agent": f"football-assistant-course-project/{version} ({REPO_URL})",
         "Accept": "application/sparql-results+json",

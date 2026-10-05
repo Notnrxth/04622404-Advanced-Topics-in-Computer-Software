@@ -376,3 +376,22 @@ async def test_any_coach_error_leaves_the_rest_of_the_ingest_running(tmp_path, m
     indexed, _ = await ingest(tmp_path)
     assert f"standings-{season}" in indexed
     assert not any(doc_id.startswith("coach-") for doc_id in indexed)
+
+
+# Review minors 2026-10-05: only well-formed QIDs reach SPARQL.
+def test_query_keeps_only_well_formed_qids():
+    query = coach_query(["Q1 } . ?x ?y ?z", "Q18656"])
+    assert "?x" not in query
+    assert "wd:Q18656" in query
+
+
+async def test_fetch_without_a_valid_qid_makes_no_call():
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(200, json=payload(binding("Q18656", "Michael Carrick")))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        assert await fetch_coaches(http, ["bad", ""], "0.1.0") == {}
+    assert calls == []
