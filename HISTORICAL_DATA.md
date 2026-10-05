@@ -96,3 +96,10 @@ Latest local review run: **33 passed** for 07 (16.11 seconds), including localho
 Regression coverage includes July 2020 dates in the COVID-delayed 2019/20 season. After regeneration, the final date is 2020-07-26; no July matches are incorrectly assigned to 2019.
 
 Unit/parser tests require no network/key. Full pinned-data tests and cached-real-provider tests skip when local inputs are absent. The optional actual-05 HTTP test remains FakeEmbedder-based, with mocked Generation; historical indexing is not claimed as end-to-end validated.
+
+## Wikidata head coaches (CONTRACT v1.16)
+
+Current head coaches come from Wikidata (CC0) property P286 with qualifiers P580 (start) and P582 (end) and the statement rank. The current coach is the open-ended, non-deprecated statement; a preferred statement wins, then the latest start. 07 queries Wikidata once per primary ingest when `COACH_INDEX_ENABLED` is on and writes `coach-<season>-team-<team_id>` documents; a failed or empty answer keeps the previous documents.
+
+`data/wikidata_clubs.json` maps football-data team IDs to Wikidata QIDs. Each QID was checked on 5 October 2026: the English label is the club name ("Arsenal F.C."), the description reads "association football club in …", and P118 (league) is the Premier League (Q9448). Labels shared by other items were resolved by description: Everton Q5794 (not the Port of Spain club), Manchester City Q50602 (not the Sierra Leone team) and Crystal Palace Q19467 (not the 1861 amateur club). Chelsea Q9616 does not match the label lookup and was taken from its item page. Re-check the file when a promoted club joins the league.
+
