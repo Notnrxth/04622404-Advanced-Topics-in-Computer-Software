@@ -1,4 +1,3 @@
-// Codex v2: trailing atlas cells are intentionally empty, not animation frames.
 export const PET_FRAMES = [7, 8, 8, 4, 5, 8, 6, 6, 6, 8, 8] as const;
 export const PET_WIDTH = 144,
   PET_HEIGHT = 156;
